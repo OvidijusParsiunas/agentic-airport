@@ -1,8 +1,8 @@
 import { useRef, useCallback, useEffect } from 'react';
 
 export function useGameLoop(callback: (deltaTime: number) => void, isRunning: boolean) {
-  const requestRef = useRef<number>();
-  const previousTimeRef = useRef<number>();
+  const requestRef = useRef<number>(0);
+  const previousTimeRef = useRef<number>(0);
 
   const animate = useCallback(
     (time: number) => {

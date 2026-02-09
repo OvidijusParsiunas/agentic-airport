@@ -1,7 +1,7 @@
-import React, { useRef, useEffect, useCallback } from 'react';
-import { GameState } from '../types/game';
 import { drawAirport, drawPlane, drawCollisionWarning, drawLandingZone } from '../utils/renderer';
+import React, { useRef, useEffect } from 'react';
 import { distance } from '../utils/geometry';
+import { GameState } from '../types/game';
 
 interface GameCanvasProps {
   gameState: GameState;

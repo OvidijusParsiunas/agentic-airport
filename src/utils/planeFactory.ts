@@ -27,8 +27,6 @@ export function generateCallsign(): string {
 export function createPlane(
   canvasWidth: number,
   canvasHeight: number,
-  centerX: number,
-  centerY: number
 ): Plane {
   planeCounter++;
 
@@ -64,7 +62,7 @@ export function createPlane(
     id: `plane-${planeCounter}`,
     position,
     heading,
-    speed: randomInRange(1.5, 2.5),
+    speed: randomInRange(0.3, 0.6),
     status: 'flying',
     callsign: generateCallsign(),
     color: COLORS[planeCounter % COLORS.length],

@@ -1,12 +1,12 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { movePosition, checkCollision, isOnRunway, angleDifference, normalizeAngle } from '../utils/geometry';
 import { GameState, Plane, Airport, AICommand, GameConfig } from '../types/game';
-import { movePosition, checkCollision, isOnRunway, angleDifference, normalizeAngle, distance } from '../utils/geometry';
 import { createPlane, resetPlaneCounter } from '../utils/planeFactory';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { getAICommands } from '../services/openai';
 
 const DEFAULT_CONFIG: GameConfig = {
   initialPlaneCount: 3,
-  aiUpdateInterval: 10000, // 10 seconds
+  aiUpdateInterval: 5000, // 5 seconds
   spawnInterval: 15000, // 15 seconds
   maxPlanes: 5,
 };
@@ -50,7 +50,7 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
     const planes: Plane[] = [];
 
     for (let i = 0; i < configRef.current.initialPlaneCount; i++) {
-      planes.push(createPlane(canvasWidth, canvasHeight, airport.position.x, airport.position.y));
+      planes.push(createPlane(canvasWidth, canvasHeight));
     }
 
     setGameState({
@@ -90,17 +90,17 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
         break;
       case 'speed':
         if (command.value !== undefined) {
-          updated.speed = Math.max(0.5, Math.min(3, command.value));
+          updated.speed = Math.max(0.15, Math.min(0.8, command.value));
         }
         break;
       case 'approach':
         updated.status = 'approaching';
-        updated.speed = Math.min(updated.speed, 1.5);
+        updated.speed = Math.min(updated.speed, 0.4);
         break;
       case 'hold':
         // Plane will circle - slightly adjust heading
         updated.heading = normalizeAngle(updated.heading + 2);
-        updated.speed = Math.max(1, updated.speed * 0.95);
+        updated.speed = Math.max(0.3, updated.speed * 0.95);
         break;
     }
 
@@ -259,7 +259,7 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
           ...prev,
           planes: [
             ...prev.planes,
-            createPlane(canvasWidth, canvasHeight, prev.airport.position.x, prev.airport.position.y),
+            createPlane(canvasWidth, canvasHeight),
           ],
         }));
       }
