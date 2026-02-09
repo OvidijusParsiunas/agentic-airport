@@ -78,7 +78,7 @@ export function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
-export const APPROACH_ZONE_LENGTH = 240;
+export const APPROACH_ZONE_LENGTH = 300; // Increased from 240 to give planes more room
 
 // Airport no-fly zone dimensions (larger than runway for safety buffer)
 export const AIRPORT_ZONE_PADDING = 30; // Extra padding around runway
@@ -129,7 +129,7 @@ export function isInApproachZone(
   };
 
   // Check if in approach zone corridor (extends from entry to runwayStart)
-  const approachWidth = runwayWidth * 1.5;
+  const approachWidth = runwayWidth * 2;
   const dx = position.x - approachZoneEntry.x;
   const dy = position.y - approachZoneEntry.y;
   const localX = dx * Math.cos(-runwayAngle) - dy * Math.sin(-runwayAngle);

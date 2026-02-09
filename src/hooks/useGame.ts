@@ -1,11 +1,11 @@
 import { movePosition, checkCollision, isOnRunway, angleDifference, normalizeAngle, isInApproachZone, isOverAirport } from '../utils/geometry';
-import { GameState, Plane, Airport, AICommand, GameConfig } from '../types/game';
+import { GameState, Plane, Airport, AICommand, GameConfig, SharedContext, PlaneDecision } from '../types/game';
 import { createPlane, resetPlaneCounter } from '../utils/planeFactory';
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { getAICommands } from '../services/openai';
+import { getPlaneAgentCommand, buildLandingQueue, buildCoordinationNote } from '../services/openai';
 
 const DEFAULT_CONFIG: GameConfig = {
-  initialPlaneCount: 3,
+  initialPlaneCount: 1,
   aiUpdateInterval: 5000, // 5 seconds
   spawnInterval: 15000, // 15 seconds
   minPlanes: 3, // Minimum active planes (new ones spawn when below this)
@@ -44,6 +44,13 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
   const lastAiCallRef = useRef<number>(0);
   const lastSpawnRef = useRef<number>(0);
   const configRef = useRef<GameConfig>(DEFAULT_CONFIG);
+  // Shared context for multi-agent coordination
+  const sharedContextRef = useRef<SharedContext>({
+    recentDecisions: [],
+    landingQueue: [],
+    lastUpdateTime: 0,
+    coordinationNote: '',
+  });
 
   // Initialize game
   const initGame = useCallback(() => {
@@ -105,9 +112,18 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
         }
         break;
       case 'hold':
-        // Plane will circle - slightly adjust heading
-        updated.heading = normalizeAngle(updated.heading + 2);
-        updated.speed = Math.max(0.3, updated.speed * 0.95);
+        // Plane will turn away from runway and slow down significantly
+        // Runway is on the right (x ≈ 600), so turn toward heading 180° (left)
+        const targetHoldHeading = 180; // Fly left, away from runway
+        const currentHeading = updated.heading;
+        const diff = targetHoldHeading - currentHeading;
+        // Gradually turn toward 180° (15° per update)
+        if (Math.abs(diff) > 15) {
+          updated.heading = normalizeAngle(currentHeading + (diff > 0 ? 15 : -15));
+        } else {
+          updated.heading = targetHoldHeading;
+        }
+        updated.speed = Math.max(0.2, updated.speed * 0.8); // Slow down more aggressively
         break;
     }
 
@@ -216,37 +232,98 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
     });
   }, [checkLanding]);
 
-  // AI control loop
+  // AI control loop - calls one agent per plane in parallel with shared context
   const callAI = useCallback(async () => {
     if (!apiKey || isAiProcessing) return;
+
+    const activePlanes = gameState.planes.filter(p => p.status !== 'landed' && p.status !== 'crashed');
+    if (activePlanes.length === 0) return;
 
     setIsAiProcessing(true);
     const timestamp = new Date().toLocaleTimeString();
 
     try {
-      const response = await getAICommands(
-        apiKey,
-        gameState.planes,
-        gameState.airport,
-        canvasWidth,
-        canvasHeight
+      // Build shared context for this round
+      const landingQueue = buildLandingQueue(gameState.planes, gameState.airport);
+      const coordinationNote = buildCoordinationNote(landingQueue);
+
+      const currentSharedContext: SharedContext = {
+        recentDecisions: sharedContextRef.current.recentDecisions,
+        landingQueue,
+        lastUpdateTime: Date.now(),
+        coordinationNote,
+      };
+
+      // Call AI agent for each plane in parallel, passing shared context
+      const agentPromises = activePlanes.map(plane =>
+        getPlaneAgentCommand(
+          apiKey,
+          plane,
+          gameState.planes,
+          gameState.airport,
+          canvasWidth,
+          canvasHeight,
+          currentSharedContext
+        ).then(response => ({ plane, response }))
+         .catch(error => ({ plane, error: error instanceof Error ? error.message : 'Unknown error' }))
       );
 
+      const results = await Promise.all(agentPromises);
+
+      // Collect log messages, commands, and new decisions for shared context
+      const logMessages: string[] = [];
+      const commands: AICommand[] = [];
+      const newDecisions: PlaneDecision[] = [];
+
+      // Get navigation data for distance info
+      for (const result of results) {
+        if ('error' in result) {
+          logMessages.push(`[${result.plane.callsign}]: Error - ${result.error}`);
+        } else {
+          const { plane, response } = result;
+          const queueEntry = landingQueue.find(e => e.planeId === plane.id);
+          const priority = queueEntry?.priority ?? '?';
+          logMessages.push(`[${plane.callsign} P${priority}]: ${response.reasoning || 'No reasoning'}`);
+
+          // Store this decision for next round's shared context
+          newDecisions.push({
+            planeId: plane.id,
+            callsign: plane.callsign,
+            action: response.command?.action || 'none',
+            value: response.command?.value,
+            reasoning: response.reasoning || '',
+            timestamp: Date.now(),
+            distanceToRunway: queueEntry?.distanceToRunway ?? 0,
+            status: plane.status,
+          });
+
+          if (response.command) {
+            commands.push(response.command);
+          }
+        }
+      }
+
+      // Update shared context with this round's decisions
+      sharedContextRef.current = {
+        ...currentSharedContext,
+        recentDecisions: newDecisions,
+      };
+
+      // Update AI log with all agent responses
       setAiLog(prev => [
-        { time: timestamp, message: response.reasoning || 'Commands issued.' },
-        ...prev.slice(0, 9), // Keep last 10 entries
+        { time: timestamp, message: logMessages.join('\n') },
+        ...prev.slice(0, 9),
       ]);
 
-      // Apply commands (apply ALL commands for each plane, not just the first)
-      if (response.commands.length > 0) {
+      // Apply all commands
+      if (commands.length > 0) {
         setGameState(prev => {
           const updatedPlanes = prev.planes.map(plane => {
-            const commands = response.commands.filter(c => c.planeId === plane.id);
-            let updated = plane;
-            for (const command of commands) {
-              updated = applyCommand(updated, command, prev.airport);
+            const planeCommand = commands.find(c => c.planeId === plane.id);
+            if (planeCommand) {
+              return applyCommand(plane, planeCommand, prev.airport);
             }
-            return updated;
+            return plane;
           });
           return { ...prev, planes: updatedPlanes };
         });

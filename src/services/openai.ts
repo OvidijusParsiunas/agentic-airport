@@ -1,5 +1,5 @@
 import { isInApproachZone, APPROACH_ZONE_LENGTH } from '../utils/geometry';
-import { Plane, Airport, AIResponse, Position } from '../types/game';
+import { Plane, Airport, AIResponse, SinglePlaneAIResponse, Position, SharedContext } from '../types/game';
 
 const FRAMES_PER_SECOND = 60;
 const AI_UPDATE_INTERVAL_SECONDS = 5;
@@ -198,6 +198,89 @@ Respond with JSON:
   "reasoning": "Brief explanation"
 }`;
 
+const PILOT_SYSTEM_PROMPT = `You are an AI pilot controlling a single aircraft. Your job is to safely land YOUR plane while coordinating with other aircraft to avoid collisions.
+
+## YOUR ASSIGNED PLANE
+You control ONLY the plane marked as "yourPlane" in the game state. Do NOT try to control other planes.
+
+## CRITICAL: LANDING QUEUE COORDINATION
+You will receive a "sharedContext" object containing:
+- **landingQueue**: Priority list showing who should land in what order (priority 1 = first to land)
+- **recentDecisions**: What other pilots decided last round - use this to predict their behavior
+- **coordinationNote**: Important coordination message to follow
+
+### LANDING QUEUE RULES (MUST FOLLOW):
+1. **ONLY Priority 1 may fly toward the runway**. All others MUST fly AWAY.
+2. If another plane is already "approaching" status, DO NOT start your approach
+3. Only ONE plane should be on final approach at a time
+4. **If you are Priority 2+, you MUST turn to heading 180° (fly LEFT) immediately**
+5. Priority 2 should hold in UPPER-LEFT area (y < 200, x < 300)
+6. Priority 3+ should hold in LOWER-LEFT area (y > 400, x < 300)
+7. Check "recentDecisions" - if another pilot is approaching, maintain distance
+
+## HOLDING/WAITING STRATEGIES:
+**If you are NOT priority 1, use the "hold" command or turn away from the runway:**
+
+1. **"hold" command is now effective** - it turns you toward heading 180° (left, away from runway) and slows you down
+2. **If near other waiting planes**, use explicit turn commands to separate:
+   - Upper half (y < 300): turn to heading 225° or 270° (fly left-down or up)
+   - Lower half (y > 300): turn to heading 135° or 90° (fly left-up or down)
+3. **Maintain distance**: Stay at least 200px away from other planes
+4. **Runway is on the RIGHT (x ≈ 600)** - waiting planes should stay on the LEFT (x < 400)
+
+## LANDING PROCEDURE (only when you are priority 1 and no one else is approaching):
+
+Your plane has "navigation" data:
+- headingToApproachZone: The heading to fly to reach the approach zone (LEFT of runway)
+- distanceToApproachZone: Distance in pixels to the approach zone entry point
+- inApproachZone: true if plane is in the green approach corridor (left of runway)
+- distanceToRunway: Distance in pixels to runway center
+- onRunway: true if plane is currently over the runway
+- alignedForLanding: true if heading is ~0° (the ONLY valid landing direction)
+
+### IMPORTANT: You MUST land from the LEFT side only!
+- The runway has green approach lights on the LEFT side
+- You MUST fly through the approach zone (left of runway) with heading ~0° (flying RIGHT)
+- Landing with heading 180° (from right) is NOT ALLOWED
+
+### Step-by-step to land (ONLY if you are priority 1):
+
+1. **POSITION FOR APPROACH**: If NOT in approach zone, turn to "headingToApproachZone" to reach the left side of the runway
+2. **ENTER APPROACH ZONE**: When inApproachZone=true, turn to heading 0° (flying right toward runway)
+3. **SET APPROACH MODE**: Once heading ~0° AND in approach zone, issue "approach" command
+4. **LAND**: Your plane lands automatically when: status=approaching + onRunway=true + heading~0° + speed<0.5
+
+## COMMANDS (for YOUR plane only):
+- turn: Set heading (0=right, 90=down, 180=left, 270=up)
+- speed: Set speed (0.15 to 0.8, use ≤0.3 for landing)
+- approach: Mark as approaching (ONLY when aligned at ~0° heading and in approach zone AND you are priority 1!)
+- hold: **GOOD FOR WAITING** - Turns plane toward heading 180° (away from runway) and slows to 0.2
+
+## COLLISION AVOIDANCE:
+- Check "collisionRisks" array for threats involving YOUR plane
+- If another plane is too close, turn away or adjust speed
+- You are responsible for YOUR plane's safety - other pilots control their own planes
+
+Respond with JSON (command for YOUR plane only):
+
+Example for Priority 1 (proceeding to land):
+{
+  "command": { "action": "turn", "value": 0 },
+  "reasoning": "P1: Turning to approach zone heading for landing"
+}
+
+Example for Priority 2+ (MUST wait - use hold to fly away!):
+{
+  "command": { "action": "hold" },
+  "reasoning": "P2: Holding - turning away from runway while P1 lands"
+}
+
+Example for separating from another waiting plane:
+{
+  "command": { "action": "turn", "value": 270 },
+  "reasoning": "P3: Turning UP to separate from P2 who is also waiting"
+}`;
+
 export async function getAICommands(
   apiKey: string,
   planes: Plane[],
@@ -294,6 +377,216 @@ export async function getAICommands(
   }
 }
 
+export async function getPlaneAgentCommand(
+  apiKey: string,
+  assignedPlane: Plane,
+  allPlanes: Plane[],
+  airport: Airport,
+  canvasWidth: number,
+  canvasHeight: number,
+  sharedContext?: SharedContext
+): Promise<SinglePlaneAIResponse> {
+  const activePlanes = allPlanes.filter(p => p.status !== 'landed' && p.status !== 'crashed');
+
+  // Get collision risks involving this plane
+  const allRisks = assessCollisionRisks(activePlanes);
+  const relevantRisks = allRisks.filter(
+    r => r.plane1 === assignedPlane.id || r.plane2 === assignedPlane.id
+  );
+
+  const runwayCenter: Position = {
+    x: (airport.runwayStart.x + airport.runwayEnd.x) / 2,
+    y: (airport.runwayStart.y + airport.runwayEnd.y) / 2,
+  };
+
+  // Find this plane's priority in the landing queue
+  const myQueueEntry = sharedContext?.landingQueue.find(e => e.planeId === assignedPlane.id);
+  const myPriority = myQueueEntry?.priority ?? 999;
+
+  // Build game state with assigned plane highlighted
+  const gameState = {
+    yourPlane: (() => {
+      const nav = calculateNavigationData(assignedPlane, airport);
+      return {
+        id: assignedPlane.id,
+        callsign: assignedPlane.callsign,
+        position: { x: Math.round(assignedPlane.position.x), y: Math.round(assignedPlane.position.y) },
+        predictedPosition: predictPosition(assignedPlane.position, assignedPlane.heading, assignedPlane.speed),
+        heading: Math.round(assignedPlane.heading),
+        speed: assignedPlane.speed.toFixed(2),
+        status: assignedPlane.status,
+        yourPriority: myPriority, // Your position in landing queue (1 = you should land first)
+        navigation: {
+          headingToApproachZone: nav.headingToApproachZone,
+          distanceToApproachZone: nav.distanceToApproachZone,
+          inApproachZone: nav.inApproachZone,
+          distanceToRunway: nav.distanceToRunway,
+          onRunway: nav.onRunway,
+          alignedForLanding: nav.alignedForLanding,
+        },
+      };
+    })(),
+    otherPlanes: activePlanes
+      .filter(p => p.id !== assignedPlane.id)
+      .map(p => {
+        const otherQueueEntry = sharedContext?.landingQueue.find(e => e.planeId === p.id);
+        return {
+          id: p.id,
+          callsign: p.callsign,
+          position: { x: Math.round(p.position.x), y: Math.round(p.position.y) },
+          predictedPosition: predictPosition(p.position, p.heading, p.speed),
+          heading: Math.round(p.heading),
+          speed: p.speed.toFixed(2),
+          status: p.status,
+          priority: otherQueueEntry?.priority ?? 999, // Their position in landing queue
+        };
+      }),
+    collisionRisks: relevantRisks.length > 0 ? relevantRisks : undefined,
+    // Shared context for coordination
+    sharedContext: sharedContext ? {
+      coordinationNote: sharedContext.coordinationNote,
+      landingQueue: sharedContext.landingQueue.map(e => ({
+        callsign: e.callsign,
+        priority: e.priority,
+        isOnApproach: e.isOnApproach,
+        distanceToRunway: e.distanceToRunway,
+      })),
+      recentDecisions: sharedContext.recentDecisions.map(d => ({
+        callsign: d.callsign,
+        action: d.action,
+        reasoning: d.reasoning,
+      })),
+    } : undefined,
+    airport: {
+      runwayCenter: { x: Math.round(runwayCenter.x), y: Math.round(runwayCenter.y) },
+      runwayStart: airport.runwayStart,
+      runwayEnd: airport.runwayEnd,
+      runwayHeading: airport.runwayHeading,
+      runwayWidth: airport.runwayWidth,
+      validLandingHeading: airport.runwayHeading,
+      approachZoneLength: APPROACH_ZONE_LENGTH,
+    },
+    canvasSize: { width: canvasWidth, height: canvasHeight },
+  };
+
+  const priorityMessage = myPriority === 1
+    ? "You are PRIORITY 1 - you should proceed to land (if safe)."
+    : `You are PRIORITY ${myPriority} - you should WAIT and hold position until planes ahead of you land.`;
+
+  const userMessage = `You are the pilot of ${assignedPlane.callsign} (ID: ${assignedPlane.id}).
+
+${priorityMessage}
+
+Current situation:
+${JSON.stringify(gameState, null, 2)}
+
+Decide your next action. Remember: If you are not priority 1, you should hold or slow down to let others land first. Respond with JSON.`;
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        instructions: PILOT_SYSTEM_PROMPT,
+        input: userMessage,
+        temperature: 0.3,
+        max_output_tokens: 500,
+        text: {
+          format: { type: 'json_object' },
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error?.message || 'API request failed');
+    }
+
+    const data = await response.json();
+    const content = data.output[0].content[0].text;
+    const parsed = JSON.parse(content) as { command: { action: string; value?: number } | null; reasoning?: string };
+
+    // Add planeId to the command if present
+    const command = parsed.command
+      ? { planeId: assignedPlane.id, action: parsed.command.action as 'turn' | 'speed' | 'hold' | 'approach', value: parsed.command.value }
+      : null;
+
+    return {
+      command,
+      reasoning: parsed.reasoning || 'No reasoning provided.',
+    };
+  } catch (error) {
+    console.error(`OpenAI API error for ${assignedPlane.callsign}:`, error);
+    throw error;
+  }
+}
+
 export function validateApiKey(apiKey: string): boolean {
   return apiKey.startsWith('sk-') && apiKey.length > 20;
+}
+
+// Helper to build landing queue based on current plane states
+export function buildLandingQueue(planes: Plane[], airport: Airport): SharedContext['landingQueue'] {
+  const activePlanes = planes.filter(p => p.status !== 'landed' && p.status !== 'crashed');
+
+  const queueEntries = activePlanes.map(plane => {
+    const nav = calculateNavigationData(plane, airport);
+    return {
+      planeId: plane.id,
+      callsign: plane.callsign,
+      distanceToRunway: nav.distanceToRunway,
+      isOnApproach: plane.status === 'approaching',
+      isInApproachZone: nav.inApproachZone,
+    };
+  });
+
+  // Sort by priority:
+  // 1. Planes already approaching (highest priority)
+  // 2. Planes in approach zone but not yet approaching
+  // 3. Others sorted by distance to runway (closer = higher priority)
+  queueEntries.sort((a, b) => {
+    // Approaching planes always first
+    if (a.isOnApproach && !b.isOnApproach) return -1;
+    if (!a.isOnApproach && b.isOnApproach) return 1;
+
+    // Then planes in approach zone
+    if (a.isInApproachZone && !b.isInApproachZone) return -1;
+    if (!a.isInApproachZone && b.isInApproachZone) return 1;
+
+    // Then by distance (closer first)
+    return a.distanceToRunway - b.distanceToRunway;
+  });
+
+  // Assign priorities (1 = first to land)
+  return queueEntries.map((entry, index) => ({
+    ...entry,
+    priority: index + 1,
+  }));
+}
+
+// Build coordination note based on current state
+export function buildCoordinationNote(landingQueue: SharedContext['landingQueue']): string {
+  const approaching = landingQueue.filter(e => e.isOnApproach);
+  const inZone = landingQueue.filter(e => e.isInApproachZone && !e.isOnApproach);
+
+  if (approaching.length > 0) {
+    const names = approaching.map(e => e.callsign).join(', ');
+    return `${names} is on FINAL APPROACH. All other aircraft MUST hold and maintain separation.`;
+  }
+
+  if (inZone.length > 0) {
+    const first = landingQueue[0];
+    return `${first.callsign} has landing priority. Other aircraft should hold or slow down.`;
+  }
+
+  if (landingQueue.length > 0) {
+    const first = landingQueue[0];
+    return `${first.callsign} is closest to runway and has landing priority.`;
+  }
+
+  return 'No aircraft in queue.';
 }
