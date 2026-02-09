@@ -254,10 +254,10 @@ export async function getAICommands(
     canvasSize: { width: canvasWidth, height: canvasHeight },
   };
 
-  const userMessage = `Current game state:\n${JSON.stringify(gameState, null, 2)}\n\nAnalyze the situation and provide commands for the planes. Remember to prevent collisions and sequence landings properly.`;
+  const userMessage = `Current game state:\n${JSON.stringify(gameState, null, 2)}\n\nAnalyze the situation and provide commands for the planes. Remember to prevent collisions and sequence landings properly. Respond with JSON.`;
 
   try {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    const response = await fetch('https://api.openai.com/v1/responses', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -265,13 +265,13 @@ export async function getAICommands(
       },
       body: JSON.stringify({
         model: 'gpt-4o-mini',
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: userMessage },
-        ],
+        instructions: SYSTEM_PROMPT,
+        input: userMessage,
         temperature: 0.3,
-        max_tokens: 1000,
-        response_format: { type: 'json_object' },
+        max_output_tokens: 1000,
+        text: {
+          format: { type: 'json_object' },
+        },
       }),
     });
 
@@ -281,7 +281,7 @@ export async function getAICommands(
     }
 
     const data = await response.json();
-    const content = data.choices[0].message.content;
+    const content = data.output[0].content[0].text;
     const parsed = JSON.parse(content) as AIResponse;
 
     return {

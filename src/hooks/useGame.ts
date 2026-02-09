@@ -1,4 +1,4 @@
-import { movePosition, checkCollision, isOnRunway, angleDifference, normalizeAngle, isInApproachZone } from '../utils/geometry';
+import { movePosition, checkCollision, isOnRunway, angleDifference, normalizeAngle, isInApproachZone, isOverAirport } from '../utils/geometry';
 import { GameState, Plane, Airport, AICommand, GameConfig } from '../types/game';
 import { createPlane, resetPlaneCounter } from '../utils/planeFactory';
 import { useState, useCallback, useRef, useEffect } from 'react';
@@ -8,13 +8,13 @@ const DEFAULT_CONFIG: GameConfig = {
   initialPlaneCount: 3,
   aiUpdateInterval: 5000, // 5 seconds
   spawnInterval: 15000, // 15 seconds
-  minPlanes: 2, // Minimum active planes (new ones spawn when below this)
-  maxPlanes: 5, // Maximum active planes
+  minPlanes: 3, // Minimum active planes (new ones spawn when below this)
+  maxPlanes: 3, // Maximum active planes
   gameSpeed: 0.5, // Multiplier for plane movement speed (1.0 = normal, 0.5 = half speed)
 };
 
 function createInitialAirport(canvasWidth: number, canvasHeight: number): Airport {
-  const centerX = canvasWidth / 2;
+  const centerX = canvasWidth * 0.75; // Positioned to the right
   const centerY = canvasHeight / 2;
   const runwayLength = 200;
 
@@ -179,6 +179,23 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
           }
         }
       }
+
+      // Check for planes flying over airport (only approaching planes are allowed)
+      newPlanes = newPlanes.map(plane => {
+        if (plane.status === 'flying') {
+          const overAirport = isOverAirport(
+            plane.position,
+            prev.airport.runwayStart,
+            prev.airport.runwayEnd,
+            prev.airport.runwayWidth
+          );
+          if (overAirport) {
+            newCollisions++;
+            return { ...plane, status: 'crashed' };
+          }
+        }
+        return plane;
+      });
 
       // Check for landings
       newPlanes = newPlanes.map(plane => checkLanding(plane, prev.airport));

@@ -80,6 +80,37 @@ export function clamp(value: number, min: number, max: number): number {
 
 export const APPROACH_ZONE_LENGTH = 240;
 
+// Airport no-fly zone dimensions (larger than runway for safety buffer)
+export const AIRPORT_ZONE_PADDING = 30; // Extra padding around runway
+
+export function isOverAirport(
+  position: Position,
+  runwayStart: Position,
+  runwayEnd: Position,
+  runwayWidth: number
+): boolean {
+  // Define airport zone as a rectangle around the runway with padding
+  const runwayLength = distance(runwayStart, runwayEnd);
+  const runwayAngle = Math.atan2(
+    runwayEnd.y - runwayStart.y,
+    runwayEnd.x - runwayStart.x
+  );
+
+  // Transform point to runway-local coordinates
+  const dx = position.x - runwayStart.x;
+  const dy = position.y - runwayStart.y;
+  const localX = dx * Math.cos(-runwayAngle) - dy * Math.sin(-runwayAngle);
+  const localY = dx * Math.sin(-runwayAngle) + dy * Math.cos(-runwayAngle);
+
+  // Check if within airport zone (runway + padding)
+  const zoneHalfWidth = (runwayWidth / 2) + AIRPORT_ZONE_PADDING;
+  return (
+    localX >= -AIRPORT_ZONE_PADDING &&
+    localX <= runwayLength + AIRPORT_ZONE_PADDING &&
+    Math.abs(localY) <= zoneHalfWidth
+  );
+}
+
 export function isInApproachZone(
   position: Position,
   runwayStart: Position,
