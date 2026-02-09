@@ -47,5 +47,7 @@ export interface GameConfig {
   initialPlaneCount: number;
   aiUpdateInterval: number; // milliseconds
   spawnInterval: number; // milliseconds
-  maxPlanes: number;
+  minPlanes: number; // Minimum active planes (new ones spawn immediately when below)
+  maxPlanes: number; // Maximum active planes
+  gameSpeed: number; // Multiplier for plane movement (1.0 = normal, 0.5 = half speed)
 }

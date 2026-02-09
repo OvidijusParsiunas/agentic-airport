@@ -1,4 +1,4 @@
-import { movePosition, checkCollision, isOnRunway, angleDifference, normalizeAngle } from '../utils/geometry';
+import { movePosition, checkCollision, isOnRunway, angleDifference, normalizeAngle, isInApproachZone } from '../utils/geometry';
 import { GameState, Plane, Airport, AICommand, GameConfig } from '../types/game';
 import { createPlane, resetPlaneCounter } from '../utils/planeFactory';
 import { useState, useCallback, useRef, useEffect } from 'react';
@@ -8,7 +8,9 @@ const DEFAULT_CONFIG: GameConfig = {
   initialPlaneCount: 3,
   aiUpdateInterval: 5000, // 5 seconds
   spawnInterval: 15000, // 15 seconds
-  maxPlanes: 5,
+  minPlanes: 2, // Minimum active planes (new ones spawn when below this)
+  maxPlanes: 5, // Maximum active planes
+  gameSpeed: 0.5, // Multiplier for plane movement speed (1.0 = normal, 0.5 = half speed)
 };
 
 function createInitialAirport(canvasWidth: number, canvasHeight: number): Airport {
@@ -49,6 +51,8 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
     const airport = createInitialAirport(canvasWidth, canvasHeight);
     const planes: Plane[] = [];
 
+      // planes.push(createPlane(canvasWidth, canvasHeight));
+
     for (let i = 0; i < configRef.current.initialPlaneCount; i++) {
       planes.push(createPlane(canvasWidth, canvasHeight));
     }
@@ -79,7 +83,7 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
   }, [canvasWidth, canvasHeight]);
 
   // Apply AI command to a plane
-  const applyCommand = useCallback((plane: Plane, command: AICommand): Plane => {
+  const applyCommand = useCallback((plane: Plane, command: AICommand, airport: Airport): Plane => {
     const updated = { ...plane };
 
     switch (command.action) {
@@ -94,8 +98,11 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
         }
         break;
       case 'approach':
-        updated.status = 'approaching';
-        updated.speed = Math.min(updated.speed, 0.4);
+        // Only allow approach if plane is in the approach zone
+        if (isInApproachZone(plane.position, airport.runwayStart, airport.runwayEnd, airport.runwayWidth)) {
+          updated.status = 'approaching';
+          updated.speed = Math.min(updated.speed, 0.4);
+        }
         break;
       case 'hold':
         // Plane will circle - slightly adjust heading
@@ -121,11 +128,11 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
     );
 
     if (onRunway && plane.status === 'approaching') {
-      // Check if heading is aligned with runway
+      // Check if heading is aligned with runway - MUST approach from left (heading ~0°)
+      // Planes must follow the green approach lights and land heading right
       const headingDiff = Math.abs(angleDifference(plane.heading, airport.runwayHeading));
-      const reverseHeadingDiff = Math.abs(angleDifference(plane.heading, airport.runwayHeading + 180));
 
-      if ((headingDiff < 25 || reverseHeadingDiff < 25) && plane.speed < 2) {
+      if (headingDiff < 25 && plane.speed < 2) {
         return { ...plane, status: 'landed', speed: 0 };
       }
     }
@@ -141,7 +148,6 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
       const dt = deltaTime / 16.67; // Normalize to ~60fps
       let newPlanes = [...prev.planes];
       let newCollisions = prev.collisions;
-      let newLandings = prev.landings;
 
       // Update plane positions
       newPlanes = newPlanes.map(plane => {
@@ -149,8 +155,8 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
           return plane;
         }
 
-        // Move plane
-        const newPosition = movePosition(plane.position, plane.heading, plane.speed * dt);
+        // Move plane (gameSpeed scales movement without affecting AI speed commands)
+        const newPosition = movePosition(plane.position, plane.heading, plane.speed * dt * configRef.current.gameSpeed);
 
         // Keep in bounds (wrap around)
         if (newPosition.x < -50) newPosition.x = prev.canvasWidth + 50;
@@ -175,16 +181,19 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
       }
 
       // Check for landings
-      const previousLandedCount = newPlanes.filter(p => p.status === 'landed').length;
       newPlanes = newPlanes.map(plane => checkLanding(plane, prev.airport));
-      const newLandedCount = newPlanes.filter(p => p.status === 'landed').length;
-      newLandings += newLandedCount - previousLandedCount;
+
+      // Count new landings before removing landed planes
+      const newLandings = newPlanes.filter(p => p.status === 'landed').length;
+
+      // Remove landed planes from the game
+      newPlanes = newPlanes.filter(p => p.status !== 'landed');
 
       return {
         ...prev,
         planes: newPlanes,
         collisions: newCollisions,
-        landings: newLandings,
+        landings: prev.landings + newLandings,
         gameTime: prev.gameTime + deltaTime / 1000,
       };
     });
@@ -211,15 +220,16 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
         ...prev.slice(0, 9), // Keep last 10 entries
       ]);
 
-      // Apply commands
+      // Apply commands (apply ALL commands for each plane, not just the first)
       if (response.commands.length > 0) {
         setGameState(prev => {
           const updatedPlanes = prev.planes.map(plane => {
-            const command = response.commands.find(c => c.planeId === plane.id);
-            if (command) {
-              return applyCommand(plane, command);
+            const commands = response.commands.filter(c => c.planeId === plane.id);
+            let updated = plane;
+            for (const command of commands) {
+              updated = applyCommand(updated, command, prev.airport);
             }
-            return plane;
+            return updated;
           });
           return { ...prev, planes: updatedPlanes };
         });
@@ -247,12 +257,23 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
       callAI();
     }
 
-    // Spawn new planes periodically
-    if (now - lastSpawnRef.current >= configRef.current.spawnInterval) {
-      const activeCount = gameState.planes.filter(
-        p => p.status !== 'landed' && p.status !== 'crashed'
-      ).length;
+    // Count active planes (not crashed)
+    const activeCount = gameState.planes.filter(
+      p => p.status !== 'crashed'
+    ).length;
 
+    // Spawn immediately if below minimum
+    if (activeCount < configRef.current.minPlanes) {
+      setGameState(prev => ({
+        ...prev,
+        planes: [
+          ...prev.planes,
+          createPlane(canvasWidth, canvasHeight),
+        ],
+      }));
+    }
+    // Spawn periodically if below maximum
+    else if (now - lastSpawnRef.current >= configRef.current.spawnInterval) {
       if (activeCount < configRef.current.maxPlanes) {
         lastSpawnRef.current = now;
         setGameState(prev => ({
