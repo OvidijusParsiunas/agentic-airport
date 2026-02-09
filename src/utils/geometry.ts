@@ -77,3 +77,32 @@ export function randomInRange(min: number, max: number): number {
 export function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
+
+export const APPROACH_ZONE_LENGTH = 240;
+
+export function isInApproachZone(
+  position: Position,
+  runwayStart: Position,
+  runwayEnd: Position,
+  runwayWidth: number
+): boolean {
+  const runwayAngle = Math.atan2(
+    runwayEnd.y - runwayStart.y,
+    runwayEnd.x - runwayStart.x
+  );
+
+  // Approach zone entry point (left of runway)
+  const approachZoneEntry: Position = {
+    x: runwayStart.x - Math.cos(runwayAngle) * APPROACH_ZONE_LENGTH,
+    y: runwayStart.y - Math.sin(runwayAngle) * APPROACH_ZONE_LENGTH,
+  };
+
+  // Check if in approach zone corridor (extends from entry to runwayStart)
+  const approachWidth = runwayWidth * 1.5;
+  const dx = position.x - approachZoneEntry.x;
+  const dy = position.y - approachZoneEntry.y;
+  const localX = dx * Math.cos(-runwayAngle) - dy * Math.sin(-runwayAngle);
+  const localY = dx * Math.sin(-runwayAngle) + dy * Math.cos(-runwayAngle);
+
+  return localX >= 0 && localX <= APPROACH_ZONE_LENGTH && Math.abs(localY) <= approachWidth / 2;
+}

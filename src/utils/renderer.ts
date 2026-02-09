@@ -1,5 +1,5 @@
+import { degToRad, APPROACH_ZONE_LENGTH } from './geometry';
 import { Plane, Airport } from '../types/game';
-import { degToRad } from './geometry';
 
 export function drawAirport(
   ctx: CanvasRenderingContext2D,
@@ -189,15 +189,14 @@ export function drawLandingZone(
   airport: Airport
 ) {
   // Draw approach path
-  const approachLength = 150;
   const runwayAngle = Math.atan2(
     airport.runwayEnd.y - airport.runwayStart.y,
     airport.runwayEnd.x - airport.runwayStart.x
   );
 
   // Extend from runway start backwards
-  const approachStartX = airport.runwayStart.x - Math.cos(runwayAngle) * approachLength;
-  const approachStartY = airport.runwayStart.y - Math.sin(runwayAngle) * approachLength;
+  const approachStartX = airport.runwayStart.x - Math.cos(runwayAngle) * APPROACH_ZONE_LENGTH;
+  const approachStartY = airport.runwayStart.y - Math.sin(runwayAngle) * APPROACH_ZONE_LENGTH;
 
   ctx.strokeStyle = '#4ade8040';
   ctx.lineWidth = airport.runwayWidth * 1.5;
