@@ -90,19 +90,25 @@ const SYSTEM_PROMPT = `You are an AI air traffic controller. Guide planes to lan
 
 ## KEY RULES
 1. Planes with "flying" status CRASH if they enter the airport zone. Issue "approach" BEFORE they reach it.
-2. Only ONE plane approaches at a time. Others must hold/wait.
-3. Planes land from the LEFT (heading ~0°).
+2. Planes with "approaching" status are SAFE over the airport. They MUST continue straight to land - NEVER hold or turn away.
+3. Only ONE plane approaches at a time. Others must hold/wait.
+4. Planes land from the LEFT (heading ~0°).
 
 ## LANDING STEPS
 1. Turn plane toward headingToApproachZone
 2. When inApproachZone=true AND heading ~0°, issue "approach"
-3. Plane lands automatically when: approaching + onRunway + speed<0.5
+3. Once "approaching": maintain heading ~0° and speed ≤0.3. Do NOT change course.
+4. Plane lands automatically when: approaching + onRunway + speed<0.5
 
 ## COMMANDS
 - turn: Set heading (0=right, 90=down, 180=left, 270=up)
 - speed: Set speed (0.15-0.8, use ≤0.3 for landing)
 - approach: Mark as approaching (only when in approach zone + aligned)
-- hold: Turn toward 180° and slow down (for waiting planes)
+- hold: Turn toward 180° and slow down (ONLY for "flying" planes that need to wait)
+
+## CRITICAL
+- NEVER issue "hold" or "turn" to an "approaching" plane. Let it land.
+- Ignore "overAirportZone" for approaching planes - they are allowed there.
 
 ## RESPONSE FORMAT
 {
