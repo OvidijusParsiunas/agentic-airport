@@ -7,8 +7,9 @@ function calculateHeadingTo(from: Position, to: Position): number {
 }
 
 interface NavigationData {
-  headingToApproachZone: number;
-  distanceToApproachZone: number;
+  headingToApproachEntry: number;  // Heading to approach zone entry (use when far away)
+  distanceToApproachEntry: number; // Distance to approach entry point
+  headingToRunway: number;         // Direct heading to runway center (use when in/near approach zone)
   inApproachZone: boolean;
   distanceToRunway: number;
   onRunway: boolean;
@@ -41,17 +42,20 @@ function calculateNavigationData(plane: Plane, airport: Airport): NavigationData
   const headingDiff = Math.abs(normalizeAngle(plane.heading) - normalizeAngle(airport.runwayHeading));
   const alignedForLanding = Math.min(headingDiff, 360 - headingDiff) < 25;
 
-  // Approach zone entry point
+  // Approach zone entry point (300px behind runway start)
   const approachZoneEntry: Position = {
     x: airport.runwayStart.x - Math.cos(runwayAngle) * APPROACH_ZONE_LENGTH,
     y: airport.runwayStart.y - Math.sin(runwayAngle) * APPROACH_ZONE_LENGTH,
   };
 
+  const inApproachZone = isInApproachZone(plane.position, airport.runwayStart, airport.runwayEnd, airport.runwayWidth);
+
   return {
     distanceToRunway,
-    headingToApproachZone: Math.round(calculateHeadingTo(plane.position, approachZoneEntry)),
-    distanceToApproachZone: Math.round(distance(plane.position, approachZoneEntry)),
-    inApproachZone: isInApproachZone(plane.position, airport.runwayStart, airport.runwayEnd, airport.runwayWidth),
+    headingToApproachEntry: Math.round(calculateHeadingTo(plane.position, approachZoneEntry)),
+    distanceToApproachEntry: Math.round(distance(plane.position, approachZoneEntry)),
+    headingToRunway: Math.round(calculateHeadingTo(plane.position, runwayCenter)),
+    inApproachZone,
     onRunway,
     alignedForLanding,
     overAirportZone: isOverAirport(plane.position, airport.runwayStart, airport.runwayEnd, airport.runwayWidth),
@@ -94,11 +98,18 @@ const SYSTEM_PROMPT = `You are an AI air traffic controller. Guide planes to lan
 3. Only ONE plane approaches at a time. Others must hold/wait.
 4. Planes land from the LEFT (heading ~0°).
 
+## NAVIGATION DATA
+- headingToApproachEntry: Heading to approach zone entry point (use when NOT in approach zone)
+- headingToRunway: Direct heading to runway center
+- inApproachZone: True when plane is in the landing corridor
+- alignedForLanding: True when heading is within 25° of runway heading (0°)
+
 ## LANDING STEPS
-1. Turn plane toward headingToApproachZone
-2. When inApproachZone=true AND heading ~0°, issue "approach"
-3. Once "approaching": maintain heading ~0° and speed ≤0.3. Do NOT change course.
-4. Plane lands automatically when: approaching + onRunway + speed<0.5
+1. When inApproachZone=false: Turn toward headingToApproachEntry to reach the approach zone
+2. When inApproachZone=true: Turn to runway heading (0°) - DO NOT use headingToApproachEntry (it points backward!)
+3. When inApproachZone=true AND alignedForLanding=true (heading ~0°), issue "approach"
+4. Once "approaching": maintain heading ~0° and speed ≤0.3. Do NOT change course.
+5. Plane lands automatically when: approaching + onRunway + speed<0.5
 
 ## COMMANDS
 - turn: Set heading (0=right, 90=down, 180=left, 270=up)
@@ -109,6 +120,7 @@ const SYSTEM_PROMPT = `You are an AI air traffic controller. Guide planes to lan
 ## CRITICAL
 - NEVER issue "hold" or "turn" to an "approaching" plane. Let it land.
 - Ignore "overAirportZone" for approaching planes - they are allowed there.
+- When inApproachZone=true, ALWAYS turn to heading 0° (runway heading), NEVER turn away from runway.
 
 ## RESPONSE FORMAT
 {
