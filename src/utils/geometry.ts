@@ -4,25 +4,17 @@ export function degToRad(degrees: number): number {
   return (degrees * Math.PI) / 180;
 }
 
-export function radToDeg(radians: number): number {
-  return (radians * 180) / Math.PI;
-}
-
 export function normalizeAngle(angle: number): number {
-  while (angle < 0) angle += 360;
-  while (angle >= 360) angle -= 360;
-  return angle;
+  let a = angle % 360;
+  if (a < 0) a += 360;
+  return a;
 }
 
 export function distance(p1: Position, p2: Position): number {
   return Math.sqrt((p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2);
 }
 
-export function movePosition(
-  position: Position,
-  heading: number,
-  speed: number
-): Position {
+export function movePosition(position: Position, heading: number, speed: number): Position {
   const rad = degToRad(heading);
   return {
     x: position.x + Math.cos(rad) * speed,
@@ -36,40 +28,6 @@ export function checkCollision(plane1: Plane, plane2: Plane, minDistance: number
   return distance(plane1.position, plane2.position) < minDistance;
 }
 
-// Extra length beyond runway end where planes can still complete landing
-export const LANDING_ZONE_EXTENSION = 100;
-
-export function isOnRunway(
-  position: Position,
-  runwayStart: Position,
-  runwayEnd: Position,
-  runwayWidth: number,
-  includeLandingExtension: boolean = false
-): boolean {
-  // Check if point is within the runway rectangle
-  const runwayLength = distance(runwayStart, runwayEnd);
-  const runwayAngle = Math.atan2(
-    runwayEnd.y - runwayStart.y,
-    runwayEnd.x - runwayStart.x
-  );
-
-  // Transform point to runway-local coordinates
-  const dx = position.x - runwayStart.x;
-  const dy = position.y - runwayStart.y;
-
-  const localX = dx * Math.cos(-runwayAngle) - dy * Math.sin(-runwayAngle);
-  const localY = dx * Math.sin(-runwayAngle) + dy * Math.cos(-runwayAngle);
-
-  // If includeLandingExtension is true, extend the valid zone past runway end
-  const maxX = includeLandingExtension ? runwayLength + LANDING_ZONE_EXTENSION : runwayLength;
-
-  return (
-    localX >= 0 &&
-    localX <= maxX &&
-    Math.abs(localY) <= runwayWidth / 2
-  );
-}
-
 export function angleDifference(angle1: number, angle2: number): number {
   let diff = normalizeAngle(angle2) - normalizeAngle(angle1);
   if (diff > 180) diff -= 360;
@@ -81,14 +39,40 @@ export function randomInRange(min: number, max: number): number {
   return Math.random() * (max - min) + min;
 }
 
-export function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
+// Zone constants
+export const APPROACH_ZONE_LENGTH = 300;
+export const LANDING_ZONE_EXTENSION = 100;
+const AIRPORT_ZONE_PADDING = 30;
+
+// Helper: transform a point to runway-local coordinates
+function toRunwayLocal(position: Position, runwayStart: Position, runwayAngle: number): { x: number; y: number } {
+  const dx = position.x - runwayStart.x;
+  const dy = position.y - runwayStart.y;
+  return {
+    x: dx * Math.cos(-runwayAngle) - dy * Math.sin(-runwayAngle),
+    y: dx * Math.sin(-runwayAngle) + dy * Math.cos(-runwayAngle),
+  };
 }
 
-export const APPROACH_ZONE_LENGTH = 300; // Increased from 240 to give planes more room
+// Helper: get runway angle from start/end points
+function getRunwayAngle(runwayStart: Position, runwayEnd: Position): number {
+  return Math.atan2(runwayEnd.y - runwayStart.y, runwayEnd.x - runwayStart.x);
+}
 
-// Airport no-fly zone dimensions (larger than runway for safety buffer)
-export const AIRPORT_ZONE_PADDING = 30; // Extra padding around runway
+export function isOnRunway(
+  position: Position,
+  runwayStart: Position,
+  runwayEnd: Position,
+  runwayWidth: number,
+  includeLandingExtension: boolean = false
+): boolean {
+  const runwayLength = distance(runwayStart, runwayEnd);
+  const runwayAngle = getRunwayAngle(runwayStart, runwayEnd);
+  const local = toRunwayLocal(position, runwayStart, runwayAngle);
+  const maxX = includeLandingExtension ? runwayLength + LANDING_ZONE_EXTENSION : runwayLength;
+
+  return local.x >= 0 && local.x <= maxX && Math.abs(local.y) <= runwayWidth / 2;
+}
 
 export function isOverAirport(
   position: Position,
@@ -96,25 +80,15 @@ export function isOverAirport(
   runwayEnd: Position,
   runwayWidth: number
 ): boolean {
-  // Define airport zone as a rectangle around the runway with padding
   const runwayLength = distance(runwayStart, runwayEnd);
-  const runwayAngle = Math.atan2(
-    runwayEnd.y - runwayStart.y,
-    runwayEnd.x - runwayStart.x
-  );
-
-  // Transform point to runway-local coordinates
-  const dx = position.x - runwayStart.x;
-  const dy = position.y - runwayStart.y;
-  const localX = dx * Math.cos(-runwayAngle) - dy * Math.sin(-runwayAngle);
-  const localY = dx * Math.sin(-runwayAngle) + dy * Math.cos(-runwayAngle);
-
-  // Check if within airport zone (runway + padding)
+  const runwayAngle = getRunwayAngle(runwayStart, runwayEnd);
+  const local = toRunwayLocal(position, runwayStart, runwayAngle);
   const zoneHalfWidth = (runwayWidth / 2) + AIRPORT_ZONE_PADDING;
+
   return (
-    localX >= -AIRPORT_ZONE_PADDING &&
-    localX <= runwayLength + AIRPORT_ZONE_PADDING &&
-    Math.abs(localY) <= zoneHalfWidth
+    local.x >= -AIRPORT_ZONE_PADDING &&
+    local.x <= runwayLength + AIRPORT_ZONE_PADDING &&
+    Math.abs(local.y) <= zoneHalfWidth
   );
 }
 
@@ -124,23 +98,14 @@ export function isInApproachZone(
   runwayEnd: Position,
   runwayWidth: number
 ): boolean {
-  const runwayAngle = Math.atan2(
-    runwayEnd.y - runwayStart.y,
-    runwayEnd.x - runwayStart.x
-  );
-
-  // Approach zone entry point (left of runway)
+  const runwayAngle = getRunwayAngle(runwayStart, runwayEnd);
   const approachZoneEntry: Position = {
     x: runwayStart.x - Math.cos(runwayAngle) * APPROACH_ZONE_LENGTH,
     y: runwayStart.y - Math.sin(runwayAngle) * APPROACH_ZONE_LENGTH,
   };
 
-  // Check if in approach zone corridor (extends from entry to runwayStart)
+  const local = toRunwayLocal(position, approachZoneEntry, runwayAngle);
   const approachWidth = runwayWidth * 2;
-  const dx = position.x - approachZoneEntry.x;
-  const dy = position.y - approachZoneEntry.y;
-  const localX = dx * Math.cos(-runwayAngle) - dy * Math.sin(-runwayAngle);
-  const localY = dx * Math.sin(-runwayAngle) + dy * Math.cos(-runwayAngle);
 
-  return localX >= 0 && localX <= APPROACH_ZONE_LENGTH && Math.abs(localY) <= approachWidth / 2;
+  return local.x >= 0 && local.x <= APPROACH_ZONE_LENGTH && Math.abs(local.y) <= approachWidth / 2;
 }
