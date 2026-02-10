@@ -115,6 +115,15 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
 
     switch (command.action) {
       case 'turn':
+        // Prevent AI from turning approaching planes - they auto-correct toward runway
+        if (plane.status === 'approaching') {
+          debugLog(config, 'AI-TURN-BLOCKED', `${plane.callsign} (${plane.id}) - turn blocked for approaching plane`, {
+            requestedHeading: command.value,
+            currentHeading: Math.round(plane.heading),
+            status: plane.status,
+          });
+          break;
+        }
         if (command.value !== undefined) {
           const oldHeading = plane.heading;
           const newHeading = normalizeAngle(command.value);
@@ -168,6 +177,14 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
         }
         break;
       case 'hold':
+        // Prevent AI from putting approaching planes in hold pattern
+        if (plane.status === 'approaching') {
+          debugLog(config, 'AI-HOLD-BLOCKED', `${plane.callsign} (${plane.id}) - hold blocked for approaching plane`, {
+            currentHeading: Math.round(plane.heading),
+            status: plane.status,
+          });
+          break;
+        }
         // Plane will turn away from runway and slow down significantly
         // Runway is on the right (x ≈ 600), so turn toward heading 180° (left)
         const targetHoldHeading = 180; // Fly left, away from runway
@@ -248,8 +265,30 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
           return plane;
         }
 
+        let updatedPlane = { ...plane };
+
+        // Auto-correct heading for approaching planes to intercept runway centerline
+        if (updatedPlane.status === 'approaching') {
+          const runwayCenter = {
+            x: (prev.airport.runwayStart.x + prev.airport.runwayEnd.x) / 2,
+            y: (prev.airport.runwayStart.y + prev.airport.runwayEnd.y) / 2,
+          };
+
+          // Calculate heading needed to reach runway center
+          const dx = runwayCenter.x - updatedPlane.position.x;
+          const dy = runwayCenter.y - updatedPlane.position.y;
+          const targetHeading = normalizeAngle((Math.atan2(dy, dx) * 180) / Math.PI);
+
+          // Gradually adjust heading toward target (max 2° per frame for smooth correction)
+          const headingDiff = angleDifference(updatedPlane.heading, targetHeading);
+          if (Math.abs(headingDiff) > 1) {
+            const correction = Math.sign(headingDiff) * Math.min(Math.abs(headingDiff), 2);
+            updatedPlane.heading = normalizeAngle(updatedPlane.heading + correction);
+          }
+        }
+
         // Move plane (gameSpeed scales movement without affecting AI speed commands)
-        const newPosition = movePosition(plane.position, plane.heading, plane.speed * dt * configRef.current.gameSpeed);
+        const newPosition = movePosition(updatedPlane.position, updatedPlane.heading, updatedPlane.speed * dt * configRef.current.gameSpeed);
 
         // Keep in bounds (wrap around)
         if (newPosition.x < -50) newPosition.x = prev.canvasWidth + 50;
@@ -257,7 +296,7 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
         if (newPosition.y < -50) newPosition.y = prev.canvasHeight + 50;
         if (newPosition.y > prev.canvasHeight + 50) newPosition.y = -50;
 
-        return { ...plane, position: newPosition };
+        return { ...updatedPlane, position: newPosition };
       });
 
       // Check for collisions
