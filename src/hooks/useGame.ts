@@ -10,8 +10,21 @@ const DEFAULT_CONFIG: GameConfig = {
   spawnInterval: 15000, // 15 seconds
   minPlanes: 6, // Minimum active planes (new ones spawn when below this)
   maxPlanes: 6, // Maximum active planes
-  gameSpeed: 0.5, // Multiplier for plane movement speed (1.0 = normal, 0.5 = half speed)
+  gameSpeed: 0.5,
+  debugLogging: true, // Toggle debug logging for AI commands, crashes, landings
 };
+
+// Debug logging helper
+function debugLog(config: GameConfig, category: string, message: string, data?: object) {
+  if (!config.debugLogging) return;
+  const timestamp = new Date().toISOString().slice(11, 23);
+  const prefix = `[${timestamp}] [${category}]`;
+  if (data) {
+    console.log(`${prefix} ${message}`, data);
+  } else {
+    console.log(`${prefix} ${message}`);
+  }
+}
 
 function createInitialAirport(canvasWidth: number, canvasHeight: number): Airport {
   const centerX = canvasWidth * 0.75; // Positioned to the right
@@ -87,23 +100,71 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
   // Apply AI command to a plane
   const applyCommand = useCallback((plane: Plane, command: AICommand, airport: Airport): Plane => {
     const updated = { ...plane };
+    const config = configRef.current;
+
+    // Calculate distance to runway center for logging
+    const runwayCenter = {
+      x: (airport.runwayStart.x + airport.runwayEnd.x) / 2,
+      y: (airport.runwayStart.y + airport.runwayEnd.y) / 2,
+    };
+    const distToRunway = Math.round(Math.sqrt(
+      Math.pow(plane.position.x - runwayCenter.x, 2) +
+      Math.pow(plane.position.y - runwayCenter.y, 2)
+    ));
+    const inApproach = isInApproachZone(plane.position, airport.runwayStart, airport.runwayEnd, airport.runwayWidth);
 
     switch (command.action) {
       case 'turn':
         if (command.value !== undefined) {
-          updated.heading = normalizeAngle(command.value);
+          const oldHeading = plane.heading;
+          const newHeading = normalizeAngle(command.value);
+          updated.heading = newHeading;
+
+          // Calculate heading change magnitude
+          let headingChange = Math.abs(newHeading - oldHeading);
+          if (headingChange > 180) headingChange = 360 - headingChange;
+
+          debugLog(config, 'AI-TURN', `${plane.callsign} (${plane.id})`, {
+            oldHeading: Math.round(oldHeading),
+            newHeading: Math.round(newHeading),
+            headingChange: Math.round(headingChange),
+            position: { x: Math.round(plane.position.x), y: Math.round(plane.position.y) },
+            distanceToRunway: distToRunway,
+            inApproachZone: inApproach,
+            status: plane.status,
+            speed: plane.speed.toFixed(2),
+          });
         }
         break;
       case 'speed':
         if (command.value !== undefined) {
+          const oldSpeed = plane.speed;
           updated.speed = Math.max(0.15, Math.min(0.8, command.value));
+          debugLog(config, 'AI-SPEED', `${plane.callsign} (${plane.id})`, {
+            oldSpeed: oldSpeed.toFixed(2),
+            newSpeed: updated.speed.toFixed(2),
+            distanceToRunway: distToRunway,
+            status: plane.status,
+          });
         }
         break;
       case 'approach':
         // Only allow approach if plane is in the approach zone
-        if (isInApproachZone(plane.position, airport.runwayStart, airport.runwayEnd, airport.runwayWidth)) {
+        if (inApproach) {
           updated.status = 'approaching';
           updated.speed = Math.min(updated.speed, 0.4);
+          debugLog(config, 'AI-APPROACH', `${plane.callsign} (${plane.id}) entering approach`, {
+            heading: Math.round(plane.heading),
+            speed: updated.speed.toFixed(2),
+            position: { x: Math.round(plane.position.x), y: Math.round(plane.position.y) },
+            distanceToRunway: distToRunway,
+          });
+        } else {
+          debugLog(config, 'AI-APPROACH-DENIED', `${plane.callsign} (${plane.id}) not in approach zone`, {
+            heading: Math.round(plane.heading),
+            position: { x: Math.round(plane.position.x), y: Math.round(plane.position.y) },
+            distanceToRunway: distToRunway,
+          });
         }
         break;
       case 'hold':
@@ -112,13 +173,23 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
         const targetHoldHeading = 180; // Fly left, away from runway
         const currentHeading = updated.heading;
         const diff = targetHoldHeading - currentHeading;
+        const oldHoldHeading = updated.heading;
         // Gradually turn toward 180° (15° per update)
         if (Math.abs(diff) > 15) {
           updated.heading = normalizeAngle(currentHeading + (diff > 0 ? 15 : -15));
         } else {
           updated.heading = targetHoldHeading;
         }
+        const oldHoldSpeed = updated.speed;
         updated.speed = Math.max(0.2, updated.speed * 0.8); // Slow down more aggressively
+        debugLog(config, 'AI-HOLD', `${plane.callsign} (${plane.id}) holding pattern`, {
+          oldHeading: Math.round(oldHoldHeading),
+          newHeading: Math.round(updated.heading),
+          oldSpeed: oldHoldSpeed.toFixed(2),
+          newSpeed: updated.speed.toFixed(2),
+          distanceToRunway: distToRunway,
+          status: plane.status,
+        });
         break;
     }
 
@@ -147,6 +218,14 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
       const headingDiff = Math.abs(angleDifference(plane.heading, airport.runwayHeading));
 
       if (headingDiff < 25 && plane.speed < 2) {
+        debugLog(configRef.current, 'LANDING', `${plane.callsign} landed successfully`, {
+          id: plane.id,
+          callsign: plane.callsign,
+          finalPosition: { x: Math.round(plane.position.x), y: Math.round(plane.position.y) },
+          finalHeading: Math.round(plane.heading),
+          finalSpeed: plane.speed.toFixed(2),
+          headingDiff: Math.round(headingDiff),
+        });
         return { ...plane, status: 'landed', speed: 0 };
       }
     }
@@ -186,6 +265,25 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
         for (let j = i + 1; j < newPlanes.length; j++) {
           if (checkCollision(newPlanes[i], newPlanes[j])) {
             if (newPlanes[i].status !== 'crashed' && newPlanes[j].status !== 'crashed') {
+              debugLog(configRef.current, 'CRASH-COLLISION', `${newPlanes[i].callsign} collided with ${newPlanes[j].callsign}`, {
+                plane1: {
+                  id: newPlanes[i].id,
+                  callsign: newPlanes[i].callsign,
+                  position: { x: Math.round(newPlanes[i].position.x), y: Math.round(newPlanes[i].position.y) },
+                  heading: Math.round(newPlanes[i].heading),
+                  speed: newPlanes[i].speed.toFixed(2),
+                  status: newPlanes[i].status,
+                },
+                plane2: {
+                  id: newPlanes[j].id,
+                  callsign: newPlanes[j].callsign,
+                  position: { x: Math.round(newPlanes[j].position.x), y: Math.round(newPlanes[j].position.y) },
+                  heading: Math.round(newPlanes[j].heading),
+                  speed: newPlanes[j].speed.toFixed(2),
+                  status: newPlanes[j].status,
+                },
+                gameTime: prev.gameTime.toFixed(1),
+              });
               newPlanes[i] = { ...newPlanes[i], status: 'crashed' };
               newPlanes[j] = { ...newPlanes[j], status: 'crashed' };
               newCollisions++;
@@ -204,6 +302,15 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
             prev.airport.runwayWidth
           );
           if (overAirport) {
+            debugLog(configRef.current, 'CRASH-AIRPORT', `${plane.callsign} crashed - flew over airport without approach status`, {
+              id: plane.id,
+              callsign: plane.callsign,
+              position: { x: Math.round(plane.position.x), y: Math.round(plane.position.y) },
+              heading: Math.round(plane.heading),
+              speed: plane.speed.toFixed(2),
+              status: plane.status,
+              gameTime: prev.gameTime.toFixed(1),
+            });
             newCollisions++;
             return { ...plane, status: 'crashed' };
           }
@@ -261,6 +368,11 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
 
       // Apply all commands
       if (response.commands.length > 0) {
+        debugLog(configRef.current, 'AI-RESPONSE', `Received ${response.commands.length} command(s)`, {
+          reasoning: response.reasoning,
+          commands: response.commands,
+        });
+
         setGameState(prev => {
           const updatedPlanes = prev.planes.map(plane => {
             const planeCommand = response.commands.find(c => c.planeId === plane.id);
@@ -289,7 +401,7 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
 
     const now = Date.now();
 
-    // AI call every 10 seconds
+    // AI call at configured interval
     if (now - lastAiCallRef.current >= configRef.current.aiUpdateInterval) {
       lastAiCallRef.current = now;
       callAI();

@@ -55,4 +55,5 @@ export interface GameConfig {
   minPlanes: number;
   maxPlanes: number;
   gameSpeed: number;
+  debugLogging: boolean;
 }
