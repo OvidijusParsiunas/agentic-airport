@@ -1,15 +1,15 @@
 import { movePosition, checkCollision, isOnRunway, angleDifference, normalizeAngle, isInApproachZone, isOverAirport } from '../utils/geometry';
-import { GameState, Plane, Airport, AICommand, GameConfig, SharedContext, PlaneDecision } from '../types/game';
+import { GameState, Plane, Airport, AICommand, GameConfig, ConversationMessage } from '../types/game';
 import { createPlane, resetPlaneCounter } from '../utils/planeFactory';
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { getPlaneAgentCommand, buildLandingQueue, buildCoordinationNote } from '../services/openai';
+import { getAICommands } from '../services/openai';
 
 const DEFAULT_CONFIG: GameConfig = {
-  initialPlaneCount: 1,
+  initialPlaneCount: 6,
   aiUpdateInterval: 5000, // 5 seconds
   spawnInterval: 15000, // 15 seconds
-  minPlanes: 3, // Minimum active planes (new ones spawn when below this)
-  maxPlanes: 3, // Maximum active planes
+  minPlanes: 6, // Minimum active planes (new ones spawn when below this)
+  maxPlanes: 6, // Maximum active planes
   gameSpeed: 0.5, // Multiplier for plane movement speed (1.0 = normal, 0.5 = half speed)
 };
 
@@ -44,13 +44,8 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
   const lastAiCallRef = useRef<number>(0);
   const lastSpawnRef = useRef<number>(0);
   const configRef = useRef<GameConfig>(DEFAULT_CONFIG);
-  // Shared context for multi-agent coordination
-  const sharedContextRef = useRef<SharedContext>({
-    recentDecisions: [],
-    landingQueue: [],
-    lastUpdateTime: 0,
-    coordinationNote: '',
-  });
+  // Conversation history for continuous AI context
+  const conversationHistoryRef = useRef<ConversationMessage[]>([]);
 
   // Initialize game
   const initGame = useCallback(() => {
@@ -58,10 +53,9 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
     const airport = createInitialAirport(canvasWidth, canvasHeight);
     const planes: Plane[] = [];
 
-      // planes.push(createPlane(canvasWidth, canvasHeight));
-
+    // Spawn planes one at a time, passing existing planes to ensure safe distances
     for (let i = 0; i < configRef.current.initialPlaneCount; i++) {
-      planes.push(createPlane(canvasWidth, canvasHeight));
+      planes.push(createPlane(canvasWidth, canvasHeight, planes, airport));
     }
 
     setGameState({
@@ -77,6 +71,7 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
     setAiLog([]);
     lastAiCallRef.current = 0;
     lastSpawnRef.current = 0;
+    conversationHistoryRef.current = []; // Reset conversation history
   }, [canvasWidth, canvasHeight]);
 
   // Update airport when canvas size changes
@@ -136,11 +131,14 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
       return plane;
     }
 
+    // Use extended landing zone (includeLandingExtension=true) so planes that overshoot
+    // the runway slightly can still complete their landing
     const onRunway = isOnRunway(
       plane.position,
       airport.runwayStart,
       airport.runwayEnd,
-      airport.runwayWidth
+      airport.runwayWidth,
+      true // Include landing extension zone past runway end
     );
 
     if (onRunway && plane.status === 'approaching') {
@@ -232,7 +230,7 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
     });
   }, [checkLanding]);
 
-  // AI control loop - calls one agent per plane in parallel with shared context
+  // AI control loop - single agent controls all planes
   const callAI = useCallback(async () => {
     if (!apiKey || isAiProcessing) return;
 
@@ -243,83 +241,29 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
     const timestamp = new Date().toLocaleTimeString();
 
     try {
-      // Build shared context for this round
-      const landingQueue = buildLandingQueue(gameState.planes, gameState.airport);
-      const coordinationNote = buildCoordinationNote(landingQueue);
-
-      const currentSharedContext: SharedContext = {
-        recentDecisions: sharedContextRef.current.recentDecisions,
-        landingQueue,
-        lastUpdateTime: Date.now(),
-        coordinationNote,
-      };
-
-      // Call AI agent for each plane in parallel, passing shared context
-      const agentPromises = activePlanes.map(plane =>
-        getPlaneAgentCommand(
-          apiKey,
-          plane,
-          gameState.planes,
-          gameState.airport,
-          canvasWidth,
-          canvasHeight,
-          currentSharedContext
-        ).then(response => ({ plane, response }))
-         .catch(error => ({ plane, error: error instanceof Error ? error.message : 'Unknown error' }))
+      const { response, newMessages } = await getAICommands(
+        apiKey,
+        gameState.planes,
+        gameState.airport,
+        canvasWidth,
+        canvasHeight,
+        conversationHistoryRef.current
       );
 
-      const results = await Promise.all(agentPromises);
+      // Store only the previous exchange for context
+      conversationHistoryRef.current = newMessages;
 
-      // Collect log messages, commands, and new decisions for shared context
-      const logMessages: string[] = [];
-      const commands: AICommand[] = [];
-      const newDecisions: PlaneDecision[] = [];
-
-      // Get navigation data for distance info
-      for (const result of results) {
-        if ('error' in result) {
-          logMessages.push(`[${result.plane.callsign}]: Error - ${result.error}`);
-        } else {
-          const { plane, response } = result;
-          const queueEntry = landingQueue.find(e => e.planeId === plane.id);
-          const priority = queueEntry?.priority ?? '?';
-          logMessages.push(`[${plane.callsign} P${priority}]: ${response.reasoning || 'No reasoning'}`);
-
-          // Store this decision for next round's shared context
-          newDecisions.push({
-            planeId: plane.id,
-            callsign: plane.callsign,
-            action: response.command?.action || 'none',
-            value: response.command?.value,
-            reasoning: response.reasoning || '',
-            timestamp: Date.now(),
-            distanceToRunway: queueEntry?.distanceToRunway ?? 0,
-            status: plane.status,
-          });
-
-          if (response.command) {
-            commands.push(response.command);
-          }
-        }
-      }
-
-      // Update shared context with this round's decisions
-      sharedContextRef.current = {
-        ...currentSharedContext,
-        recentDecisions: newDecisions,
-      };
-
-      // Update AI log with all agent responses
+      // Update AI log
       setAiLog(prev => [
-        { time: timestamp, message: logMessages.join('\n') },
+        { time: timestamp, message: response.reasoning || 'No reasoning provided' },
         ...prev.slice(0, 9),
       ]);
 
       // Apply all commands
-      if (commands.length > 0) {
+      if (response.commands.length > 0) {
         setGameState(prev => {
           const updatedPlanes = prev.planes.map(plane => {
-            const planeCommand = commands.find(c => c.planeId === plane.id);
+            const planeCommand = response.commands.find(c => c.planeId === plane.id);
             if (planeCommand) {
               return applyCommand(plane, planeCommand, prev.airport);
             }
@@ -362,7 +306,7 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
         ...prev,
         planes: [
           ...prev.planes,
-          createPlane(canvasWidth, canvasHeight),
+          createPlane(canvasWidth, canvasHeight, prev.planes, prev.airport),
         ],
       }));
     }
@@ -374,7 +318,7 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
           ...prev,
           planes: [
             ...prev.planes,
-            createPlane(canvasWidth, canvasHeight),
+            createPlane(canvasWidth, canvasHeight, prev.planes, prev.airport),
           ],
         }));
       }

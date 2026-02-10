@@ -36,11 +36,15 @@ export function checkCollision(plane1: Plane, plane2: Plane, minDistance: number
   return distance(plane1.position, plane2.position) < minDistance;
 }
 
+// Extra length beyond runway end where planes can still complete landing
+export const LANDING_ZONE_EXTENSION = 100;
+
 export function isOnRunway(
   position: Position,
   runwayStart: Position,
   runwayEnd: Position,
-  runwayWidth: number
+  runwayWidth: number,
+  includeLandingExtension: boolean = false
 ): boolean {
   // Check if point is within the runway rectangle
   const runwayLength = distance(runwayStart, runwayEnd);
@@ -56,9 +60,12 @@ export function isOnRunway(
   const localX = dx * Math.cos(-runwayAngle) - dy * Math.sin(-runwayAngle);
   const localY = dx * Math.sin(-runwayAngle) + dy * Math.cos(-runwayAngle);
 
+  // If includeLandingExtension is true, extend the valid zone past runway end
+  const maxX = includeLandingExtension ? runwayLength + LANDING_ZONE_EXTENSION : runwayLength;
+
   return (
     localX >= 0 &&
-    localX <= runwayLength &&
+    localX <= maxX &&
     Math.abs(localY) <= runwayWidth / 2
   );
 }

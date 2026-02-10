@@ -1,5 +1,5 @@
-import { isInApproachZone, APPROACH_ZONE_LENGTH } from '../utils/geometry';
-import { Plane, Airport, AIResponse, SinglePlaneAIResponse, Position, SharedContext } from '../types/game';
+import { isInApproachZone, isOverAirport, APPROACH_ZONE_LENGTH } from '../utils/geometry';
+import { Plane, Airport, AIResponse, SinglePlaneAIResponse, Position, SharedContext, ConversationMessage } from '../types/game';
 
 const FRAMES_PER_SECOND = 60;
 const AI_UPDATE_INTERVAL_SECONDS = 5;
@@ -46,6 +46,8 @@ interface NavigationData {
   headingToApproachZone: number;
   distanceToApproachZone: number;
   inApproachZone: boolean;
+  // Airport zone - planes with "flying" status will CRASH if they enter this zone!
+  overAirportZone: boolean;
 }
 
 function calculateNavigationData(plane: Plane, airport: Airport): NavigationData {
@@ -92,6 +94,14 @@ function calculateNavigationData(plane: Plane, airport: Airport): NavigationData
     airport.runwayWidth
   );
 
+  // Check if plane is over the airport zone (will crash if status is "flying"!)
+  const overAirportZone = isOverAirport(
+    plane.position,
+    airport.runwayStart,
+    airport.runwayEnd,
+    airport.runwayWidth
+  );
+
   return {
     distanceToRunway,
     headingToRunwayCenter,
@@ -100,6 +110,7 @@ function calculateNavigationData(plane: Plane, airport: Airport): NavigationData
     headingToApproachZone,
     distanceToApproachZone,
     inApproachZone,
+    overAirportZone,
   };
 }
 
@@ -151,49 +162,61 @@ function assessCollisionRisks(planes: Plane[]): CollisionRisk[] {
 
 const SYSTEM_PROMPT = `You are an AI air traffic controller. Land planes safely without collisions.
 
-## LANDING PROCEDURE (CRITICAL - follow these steps exactly):
+## CRITICAL: AIRPORT NO-FLY ZONE
+- Planes with status "flying" will CRASH if they fly over the airport/runway area!
+- A plane MUST have status "approaching" BEFORE entering the runway zone
+- Issue the "approach" command when the plane is in the approach zone (inApproachZone=true) and aligned (heading ~0°)
+- If a plane is heading toward the runway but is NOT "approaching", it will crash!
+
+## CRITICAL RULE: ONE PLANE AT A TIME!
+- **ONLY ONE plane may approach the runway at a time**
+- All other planes MUST hold in safe positions away from the approach zone
+- The plane with status "approaching" has priority - all others WAIT
+- If no plane is approaching, the plane CLOSEST to the approach zone goes next
+- NEVER send two planes toward heading 0° simultaneously!
+
+## SEQUENCING (MUST FOLLOW):
+1. Pick ONE plane to land (closest to approach zone, or already "approaching")
+2. All OTHER planes: turn them AWAY (heading 180-270°) and slow down
+3. Only after current plane lands, guide the next one
+
+## HOLDING PATTERNS FOR WAITING PLANES:
+- Turn waiting planes to heading 180° (fly LEFT, away from runway)
+- Keep them at x < 300 (left side of screen)
+- Separate vertically: first waiter at y~150, second at y~450
+- Use "hold" command or explicit turn away from runway
+
+## LANDING PROCEDURE (for the ONE plane landing):
 
 Each plane has "navigation" data:
 - headingToApproachZone: The heading to fly to reach the approach zone (LEFT of runway)
-- distanceToApproachZone: Distance in pixels to the approach zone entry point
-- inApproachZone: true if plane is in the green approach corridor (left of runway)
+- inApproachZone: true if plane is in the green approach corridor
 - distanceToRunway: Distance in pixels to runway center
 - onRunway: true if plane is currently over the runway
-- alignedForLanding: true if heading is ~0° (the ONLY valid landing direction)
+- alignedForLanding: true if heading is ~0°
 
-### IMPORTANT: Planes MUST land from the LEFT side only!
-- The runway has green approach lights on the LEFT side
-- Planes MUST fly through the approach zone (left of runway) with heading ~0° (flying RIGHT)
-- Landing with heading 180° (from right) is NOT ALLOWED
-
-### Step-by-step to land a plane:
-
-1. **POSITION FOR APPROACH**: If plane is NOT in approach zone, turn to "headingToApproachZone" to reach the left side of the runway
-2. **ENTER APPROACH ZONE**: When inApproachZone=true, turn to heading 0° (flying right toward runway)
-3. **SET APPROACH MODE**: Once heading ~0° AND in approach zone, issue "approach" command
-4. **PLANE LANDS AUTOMATICALLY** when: status=approaching + onRunway=true + heading~0° + speed<0.5
+### Steps to land:
+1. Turn to "headingToApproachZone" to reach left side of runway
+2. When inApproachZone=true, turn to heading 0°
+3. When heading ~0° AND in approach zone, issue "approach" command
+4. Plane lands automatically when: approaching + onRunway + heading~0° + speed<0.5
 
 ## COMMANDS:
 - turn: Set heading (0=right, 90=down, 180=left, 270=up)
 - speed: Set speed (0.15 to 0.8, use ≤0.3 for landing)
-- approach: Mark as approaching (ONLY when aligned at ~0° heading and in approach zone!)
-- hold: Circle in place (+2° heading, -5% speed)
+- approach: Mark as approaching (ONLY for the ONE plane that's landing!)
+- hold: Turn toward 180° and slow down (good for waiting planes)
 
 ## COLLISION AVOIDANCE:
-- Check "collisionRisks" array - HIGH risk means immediate action needed
-- If predictedDistance < 60px, turn one plane away or slow it down
-
-## IMPORTANT:
-- Planes MUST approach from the LEFT (follow the green approach lights)
-- The ONLY valid landing heading is ~0° (flying right)
-- Guide planes to position LEFT of runway first, then turn to heading 0° to land
-- The "approach" command does NOT change the plane's direction - YOU must turn it first!
+- Check "collisionRisks" array - HIGH risk means immediate action
+- If two planes are close, turn the one NOT landing away immediately
+- The landing plane has right-of-way
 
 Respond with JSON:
 {
   "commands": [
     { "planeId": "plane-1", "action": "turn", "value": 0 },
-    { "planeId": "plane-2", "action": "speed", "value": 0.3 }
+    { "planeId": "plane-2", "action": "hold" }
   ],
   "reasoning": "Brief explanation"
 }`;
@@ -202,6 +225,12 @@ const PILOT_SYSTEM_PROMPT = `You are an AI pilot controlling a single aircraft. 
 
 ## YOUR ASSIGNED PLANE
 You control ONLY the plane marked as "yourPlane" in the game state. Do NOT try to control other planes.
+
+## CRITICAL: AIRPORT NO-FLY ZONE - YOU WILL CRASH!
+- If your status is "flying" and you fly over the airport/runway area, YOU WILL CRASH!
+- You MUST get "approaching" status BEFORE entering the runway zone
+- To get "approaching" status: be in the approach zone (inApproachZone=true) AND aligned (heading ~0°), then issue "approach" command
+- If you are heading toward the runway but still have "flying" status, TURN AWAY or issue "approach" if eligible!
 
 ## CRITICAL: LANDING QUEUE COORDINATION
 You will receive a "sharedContext" object containing:
@@ -286,12 +315,16 @@ export async function getAICommands(
   planes: Plane[],
   airport: Airport,
   canvasWidth: number,
-  canvasHeight: number
-): Promise<AIResponse> {
+  canvasHeight: number,
+  conversationHistory: ConversationMessage[] = []
+): Promise<{ response: AIResponse; newMessages: ConversationMessage[] }> {
   const activePlanes = planes.filter(p => p.status !== 'landed' && p.status !== 'crashed');
 
   if (activePlanes.length === 0) {
-    return { commands: [], reasoning: 'No active planes to control.' };
+    return {
+      response: { commands: [], reasoning: 'No active planes to control.' },
+      newMessages: []
+    };
   }
 
   const collisionRisks = assessCollisionRisks(activePlanes);
@@ -321,6 +354,8 @@ export async function getAICommands(
           distanceToRunway: nav.distanceToRunway,
           onRunway: nav.onRunway,
           alignedForLanding: nav.alignedForLanding, // true if heading ~0° (the ONLY valid landing direction)
+          // DANGER: if true and status is "flying", plane will CRASH!
+          overAirportZone: nav.overAirportZone,
         },
       };
     }),
@@ -339,6 +374,15 @@ export async function getAICommands(
 
   const userMessage = `Current game state:\n${JSON.stringify(gameState, null, 2)}\n\nAnalyze the situation and provide commands for the planes. Remember to prevent collisions and sequence landings properly. Respond with JSON.`;
 
+  // Build input with conversation history
+  const input = [
+    ...conversationHistory.map(msg => ({
+      role: msg.role,
+      content: msg.content,
+    })),
+    { role: 'user', content: userMessage },
+  ];
+
   try {
     const response = await fetch('https://api.openai.com/v1/responses', {
       method: 'POST',
@@ -349,7 +393,7 @@ export async function getAICommands(
       body: JSON.stringify({
         model: 'gpt-4o-mini',
         instructions: SYSTEM_PROMPT,
-        input: userMessage,
+        input,
         temperature: 0.3,
         max_output_tokens: 1000,
         text: {
@@ -364,13 +408,26 @@ export async function getAICommands(
     }
 
     const data = await response.json();
-    const content = data.output[0].content[0].text;
+    // Find the message output (not reasoning)
+    const messageOutput = data.output.find((item: { type: string }) => item.type === 'message');
+    if (!messageOutput || !messageOutput.content || !messageOutput.content[0]) {
+      throw new Error('No message content in API response');
+    }
+    const content = messageOutput.content[0].text;
     const parsed = JSON.parse(content) as AIResponse;
 
-    return {
+    const aiResponse: AIResponse = {
       commands: parsed.commands || [],
       reasoning: parsed.reasoning || 'No reasoning provided.',
     };
+
+    // Return the new messages to add to history
+    const newMessages: ConversationMessage[] = [
+      { role: 'user', content: userMessage },
+      { role: 'assistant', content: content },
+    ];
+
+    return { response: aiResponse, newMessages };
   } catch (error) {
     console.error('OpenAI API error:', error);
     throw error;
@@ -423,6 +480,8 @@ export async function getPlaneAgentCommand(
           distanceToRunway: nav.distanceToRunway,
           onRunway: nav.onRunway,
           alignedForLanding: nav.alignedForLanding,
+          // DANGER: if true and your status is "flying", you will CRASH!
+          overAirportZone: nav.overAirportZone,
         },
       };
     })(),
@@ -507,7 +566,12 @@ Decide your next action. Remember: If you are not priority 1, you should hold or
     }
 
     const data = await response.json();
-    const content = data.output[0].content[0].text;
+    // Find the message output (not reasoning)
+    const messageOutput = data.output.find((item: { type: string }) => item.type === 'message');
+    if (!messageOutput || !messageOutput.content || !messageOutput.content[0]) {
+      throw new Error('No message content in API response');
+    }
+    const content = messageOutput.content[0].text;
     const parsed = JSON.parse(content) as { command: { action: string; value?: number } | null; reasoning?: string };
 
     // Add planeId to the command if present

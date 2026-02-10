@@ -43,6 +43,11 @@ export interface AIResponse {
   reasoning?: string;
 }
 
+export interface ConversationMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 export interface SinglePlaneAIResponse {
   command: AICommand | null;
   reasoning?: string;

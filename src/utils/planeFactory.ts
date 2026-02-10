@@ -1,5 +1,10 @@
-import { Plane, Position } from '../types/game';
-import { randomInRange } from './geometry';
+import { Plane, Position, Airport } from '../types/game';
+import { randomInRange, distance } from './geometry';
+
+// Minimum safe distance between planes at spawn (larger than collision distance of 30)
+const MIN_SPAWN_DISTANCE = 120;
+// Minimum distance from airport center when spawning
+const MIN_AIRPORT_DISTANCE = 200;
 
 const CALLSIGNS = [
   'AA', 'UA', 'DL', 'SW', 'BA', 'LH', 'AF', 'KL', 'QF', 'EK',
@@ -24,44 +29,78 @@ export function generateCallsign(): string {
   return `${prefix}${number}`;
 }
 
+function generateSpawnPosition(
+  canvasWidth: number,
+  canvasHeight: number
+): { position: Position; heading: number } {
+  const margin = 50;
+
+  // Only spawn from top, bottom, or left edges (exclude right - too close to airport)
+  // All planes head horizontally RIGHT (0°) so they don't collide head-on
+  const edge = Math.floor(Math.random() * 3); // 0 = top, 1 = bottom, 2 = left
+
+  let position: Position;
+  const heading = 0; // All planes head right toward the airport
+
+  switch (edge) {
+    case 0: // Top - spawn on left half to give room
+      position = { x: randomInRange(margin, canvasWidth * 0.4), y: margin };
+      break;
+    case 1: // Bottom - spawn on left half to give room
+      position = { x: randomInRange(margin, canvasWidth * 0.4), y: canvasHeight - margin };
+      break;
+    case 2: // Left
+    default:
+      position = { x: margin, y: randomInRange(margin, canvasHeight - margin) };
+      break;
+  }
+
+  return { position, heading };
+}
+
+function isSafeSpawnPosition(
+  position: Position,
+  existingPlanes: Plane[],
+  airport?: Airport
+): boolean {
+  // Check distance from all existing active planes
+  for (const plane of existingPlanes) {
+    if (plane.status === 'crashed' || plane.status === 'landed') continue;
+    if (distance(position, plane.position) < MIN_SPAWN_DISTANCE) {
+      return false;
+    }
+  }
+
+  // Check distance from airport if provided
+  if (airport && distance(position, airport.position) < MIN_AIRPORT_DISTANCE) {
+    return false;
+  }
+
+  return true;
+}
+
 export function createPlane(
   canvasWidth: number,
   canvasHeight: number,
+  existingPlanes: Plane[] = [],
+  airport?: Airport
 ): Plane {
   planeCounter++;
 
-  // Spawn planes from edges, heading roughly toward center
-  const edge = Math.floor(Math.random() * 4);
-  let position: Position;
-  let heading: number;
+  // Try to find a safe spawn position (max 10 attempts)
+  let spawn = generateSpawnPosition(canvasWidth, canvasHeight);
+  let attempts = 0;
+  const maxAttempts = 10;
 
-  const margin = 50;
-  const variance = 30;
-
-  switch (edge) {
-    case 0: // Top
-      position = { x: randomInRange(margin, canvasWidth - margin), y: margin };
-      heading = randomInRange(90 - variance, 90 + variance);
-      break;
-    case 1: // Right
-      position = { x: canvasWidth - margin, y: randomInRange(margin, canvasHeight - margin) };
-      heading = randomInRange(180 - variance, 180 + variance);
-      break;
-    case 2: // Bottom
-      position = { x: randomInRange(margin, canvasWidth - margin), y: canvasHeight - margin };
-      heading = randomInRange(270 - variance, 270 + variance);
-      break;
-    case 3: // Left
-    default:
-      position = { x: margin, y: randomInRange(margin, canvasHeight - margin) };
-      heading = randomInRange(-variance, variance);
-      break;
+  while (!isSafeSpawnPosition(spawn.position, existingPlanes, airport) && attempts < maxAttempts) {
+    spawn = generateSpawnPosition(canvasWidth, canvasHeight);
+    attempts++;
   }
 
   return {
     id: `plane-${planeCounter}`,
-    position,
-    heading,
+    position: spawn.position,
+    heading: spawn.heading,
     speed: randomInRange(0.3, 0.6),
     status: 'flying',
     callsign: generateCallsign(),
