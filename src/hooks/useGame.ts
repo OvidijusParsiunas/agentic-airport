@@ -1,8 +1,10 @@
-import { movePosition, checkCollision, isOnRunway, angleDifference, normalizeAngle, isInApproachZone, isOverAirport } from '../utils/geometry';
-import { GameState, Plane, Airport, AICommand, GameConfig, ConversationMessage } from '../types/game';
+import { movePosition, checkCollision, isOnRunway, angleDifference, normalizeAngle, isOverAirport } from '../utils/geometry';
+import { GameState, Plane, Airport, GameConfig, ConversationMessage } from '../types/game';
 import { createPlane, resetPlaneCounter } from '../utils/planeFactory';
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { getAICommands } from '../services/openai';
+import { debugLog } from '../utils/debug';
+import { applyCommand } from '../utils/commandHandler';
 
 const DEFAULT_CONFIG: GameConfig = {
   initialPlaneCount: 4,
@@ -13,165 +15,6 @@ const DEFAULT_CONFIG: GameConfig = {
   gameSpeed: 0.5,
   debugLogging: true, // Toggle debug logging for AI commands, crashes, landings
 };
-
-// Debug logging helper
-function debugLog(config: GameConfig, category: string, message: string, data?: object) {
-  if (!config.debugLogging) return;
-  const timestamp = new Date().toISOString().slice(11, 23);
-  const prefix = `[${timestamp}] [${category}]`;
-  if (data) {
-    console.log(`${prefix} ${message}`, data);
-  } else {
-    console.log(`${prefix} ${message}`);
-  }
-}
-
-// Predictive collision detection - checks if a plane with a new heading would collide with other planes
-interface CollisionPrediction {
-  willCollide: boolean;
-  collidingPlane?: Plane;
-  timeToCollision?: number;
-  collisionPoint?: { x: number; y: number };
-}
-
-function predictCollision(
-  plane: Plane,
-  newHeading: number,
-  allPlanes: Plane[],
-  config: GameConfig,
-  secondsAhead: number = 8
-): CollisionPrediction {
-  const fps = 60;
-  const totalFrames = secondsAhead * fps;
-  const checkInterval = 5; // Check every 5 frames for performance
-  const collisionThreshold = 50; // Slightly larger than actual collision distance (30px) for safety margin
-
-  const headingRad = (newHeading * Math.PI) / 180;
-  const planeSpeed = plane.speed * config.gameSpeed;
-
-  for (let frame = checkInterval; frame <= totalFrames; frame += checkInterval) {
-    // Simulate this plane's position with the new heading
-    const simX = plane.position.x + Math.cos(headingRad) * planeSpeed * frame;
-    const simY = plane.position.y + Math.sin(headingRad) * planeSpeed * frame;
-
-    // Check against all other active planes
-    for (const other of allPlanes) {
-      if (other.id === plane.id || other.status === 'crashed' || other.status === 'landed') {
-        continue;
-      }
-
-      // Simulate other plane's position (assuming it continues on current heading)
-      const otherHeadingRad = (other.heading * Math.PI) / 180;
-      const otherSpeed = other.speed * config.gameSpeed;
-      const otherSimX = other.position.x + Math.cos(otherHeadingRad) * otherSpeed * frame;
-      const otherSimY = other.position.y + Math.sin(otherHeadingRad) * otherSpeed * frame;
-
-      // Calculate distance between simulated positions
-      const dist = Math.sqrt(
-        Math.pow(simX - otherSimX, 2) + Math.pow(simY - otherSimY, 2)
-      );
-
-      if (dist < collisionThreshold) {
-        return {
-          willCollide: true,
-          collidingPlane: other,
-          timeToCollision: frame / fps,
-          collisionPoint: { x: simX, y: simY },
-        };
-      }
-    }
-  }
-
-  return { willCollide: false };
-}
-
-// Find a safe alternative heading that avoids collision
-function findSafeHeading(
-  plane: Plane,
-  requestedHeading: number,
-  allPlanes: Plane[],
-  config: GameConfig
-): number | null {
-  // Try adjustments in both directions, starting small
-  const adjustments = [30, -30, 60, -60, 90, -90, 120, -120, 150, -150, 180];
-
-  for (const adjustment of adjustments) {
-    const alternativeHeading = normalizeAngle(requestedHeading + adjustment);
-    const prediction = predictCollision(plane, alternativeHeading, allPlanes, config);
-    if (!prediction.willCollide) {
-      return alternativeHeading;
-    }
-  }
-
-  // No safe heading found - plane should hold position/slow down
-  return null;
-}
-
-// Predict if a plane will enter the airport zone with its current/proposed heading
-interface AirportZonePrediction {
-  willEnter: boolean;
-  framesUntilEntry?: number;
-  entryPoint?: { x: number; y: number };
-}
-
-function predictAirportZoneEntry(
-  plane: Plane,
-  heading: number,
-  airport: Airport,
-  config: GameConfig,
-  secondsAhead: number = 10
-): AirportZonePrediction {
-  const fps = 60;
-  const totalFrames = secondsAhead * fps;
-  const checkInterval = 5;
-
-  const headingRad = (heading * Math.PI) / 180;
-  const planeSpeed = plane.speed * config.gameSpeed;
-
-  let simX = plane.position.x;
-  let simY = plane.position.y;
-
-  for (let frame = checkInterval; frame <= totalFrames; frame += checkInterval) {
-    simX = plane.position.x + Math.cos(headingRad) * planeSpeed * frame;
-    simY = plane.position.y + Math.sin(headingRad) * planeSpeed * frame;
-
-    if (isOverAirport({ x: simX, y: simY }, airport.runwayStart, airport.runwayEnd, airport.runwayWidth)) {
-      return {
-        willEnter: true,
-        framesUntilEntry: frame,
-        entryPoint: { x: simX, y: simY },
-      };
-    }
-  }
-
-  return { willEnter: false };
-}
-
-// Find a heading that leads away from the airport zone
-function findHeadingAwayFromAirport(
-  plane: Plane,
-  airport: Airport,
-  config: GameConfig
-): number {
-  const runwayCenter = {
-    x: (airport.runwayStart.x + airport.runwayEnd.x) / 2,
-    y: (airport.runwayStart.y + airport.runwayEnd.y) / 2,
-  };
-
-  // Calculate heading directly away from runway center
-  const dx = plane.position.x - runwayCenter.x;
-  const dy = plane.position.y - runwayCenter.y;
-  const awayHeading = normalizeAngle((Math.atan2(dy, dx) * 180) / Math.PI);
-
-  // Verify this heading doesn't lead into the airport zone
-  const prediction = predictAirportZoneEntry(plane, awayHeading, airport, config, 5);
-  if (!prediction.willEnter) {
-    return awayHeading;
-  }
-
-  // If directly away still leads to airport (unlikely), try heading 180 (left)
-  return 180;
-}
 
 function createInitialAirport(canvasWidth: number, canvasHeight: number): Airport {
   const centerX = canvasWidth * 0.75; // Positioned to the right
@@ -243,206 +86,6 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
       canvasHeight,
     }));
   }, [canvasWidth, canvasHeight]);
-
-  // Apply AI command to a plane
-  const applyCommand = useCallback((plane: Plane, command: AICommand, airport: Airport, allPlanes: Plane[]): Plane => {
-    const updated = { ...plane };
-    const config = configRef.current;
-
-    // Calculate distance to runway center for logging
-    const runwayCenter = {
-      x: (airport.runwayStart.x + airport.runwayEnd.x) / 2,
-      y: (airport.runwayStart.y + airport.runwayEnd.y) / 2,
-    };
-    const distToRunway = Math.round(Math.sqrt(
-      Math.pow(plane.position.x - runwayCenter.x, 2) +
-      Math.pow(plane.position.y - runwayCenter.y, 2)
-    ));
-    const inApproach = isInApproachZone(plane.position, airport.runwayStart, airport.runwayEnd, airport.runwayWidth);
-
-    switch (command.action) {
-      case 'turn':
-        // Prevent AI from turning approaching planes - they auto-correct toward runway
-        if (plane.status === 'approaching') {
-          debugLog(config, 'AI-TURN-BLOCKED', `${plane.callsign} (${plane.id}) - turn blocked for approaching plane`, {
-            requestedHeading: command.value,
-            currentHeading: Math.round(plane.heading),
-            status: plane.status,
-          });
-          break;
-        }
-        if (command.value !== undefined) {
-          const oldHeading = plane.heading;
-          let newHeading = normalizeAngle(command.value);
-
-          // Predictive collision detection - check if this turn would cause a collision
-          const prediction = predictCollision(plane, newHeading, allPlanes, config);
-          if (prediction.willCollide && prediction.collidingPlane) {
-            debugLog(config, 'AI-TURN-COLLISION-PREDICTED', `${plane.callsign} (${plane.id}) - turn would collide with ${prediction.collidingPlane.callsign}`, {
-              requestedHeading: Math.round(newHeading),
-              currentHeading: Math.round(oldHeading),
-              collidingWith: prediction.collidingPlane.callsign,
-              timeToCollision: prediction.timeToCollision?.toFixed(1) + 's',
-              collisionPoint: prediction.collisionPoint,
-            });
-
-            // Try to find a safe alternative heading
-            const safeHeading = findSafeHeading(plane, newHeading, allPlanes, config);
-            if (safeHeading !== null) {
-              debugLog(config, 'AI-TURN-REDIRECTED', `${plane.callsign} (${plane.id}) - redirecting to safe heading`, {
-                originalHeading: Math.round(newHeading),
-                safeHeading: Math.round(safeHeading),
-              });
-              newHeading = safeHeading;
-            } else {
-              // No safe heading found - reject the turn command entirely
-              debugLog(config, 'AI-TURN-REJECTED', `${plane.callsign} (${plane.id}) - no safe heading found, maintaining current heading`, {
-                requestedHeading: Math.round(newHeading),
-                currentHeading: Math.round(oldHeading),
-              });
-              break;
-            }
-          }
-
-          // Predictive airport zone detection - prevent flying planes from entering airport zone
-          if (plane.status === 'flying') {
-            const airportPrediction = predictAirportZoneEntry(plane, newHeading, airport, config, 6);
-            if (airportPrediction.willEnter) {
-              debugLog(config, 'AI-TURN-AIRPORT-PREDICTED', `${plane.callsign} (${plane.id}) - turn would enter airport zone`, {
-                requestedHeading: Math.round(newHeading),
-                currentHeading: Math.round(oldHeading),
-                framesUntilEntry: airportPrediction.framesUntilEntry,
-                entryPoint: airportPrediction.entryPoint,
-              });
-
-              // Try to find a heading away from the airport
-              const safeHeading = findHeadingAwayFromAirport(plane, airport, config);
-              // Verify the safe heading also doesn't cause a collision
-              const collisionCheck = predictCollision(plane, safeHeading, allPlanes, config);
-              if (!collisionCheck.willCollide) {
-                debugLog(config, 'AI-TURN-REDIRECTED-AIRPORT', `${plane.callsign} (${plane.id}) - redirecting away from airport`, {
-                  originalHeading: Math.round(newHeading),
-                  safeHeading: Math.round(safeHeading),
-                });
-                newHeading = safeHeading;
-              } else {
-                // Can't turn toward airport and can't find safe heading - reject
-                debugLog(config, 'AI-TURN-REJECTED-AIRPORT', `${plane.callsign} (${plane.id}) - no safe heading found, maintaining current heading`, {
-                  requestedHeading: Math.round(newHeading),
-                  currentHeading: Math.round(oldHeading),
-                });
-                break;
-              }
-            }
-          }
-
-          updated.heading = newHeading;
-
-          // Calculate heading change magnitude
-          let headingChange = Math.abs(newHeading - oldHeading);
-          if (headingChange > 180) headingChange = 360 - headingChange;
-
-          debugLog(config, 'AI-TURN', `${plane.callsign} (${plane.id})`, {
-            oldHeading: Math.round(oldHeading),
-            newHeading: Math.round(newHeading),
-            headingChange: Math.round(headingChange),
-            position: { x: Math.round(plane.position.x), y: Math.round(plane.position.y) },
-            distanceToRunway: distToRunway,
-            inApproachZone: inApproach,
-            status: plane.status,
-            speed: plane.speed.toFixed(2),
-          });
-        }
-        break;
-      case 'speed':
-        if (command.value !== undefined) {
-          const oldSpeed = plane.speed;
-          updated.speed = Math.max(0.15, Math.min(0.8, command.value));
-          debugLog(config, 'AI-SPEED', `${plane.callsign} (${plane.id})`, {
-            oldSpeed: oldSpeed.toFixed(2),
-            newSpeed: updated.speed.toFixed(2),
-            distanceToRunway: distToRunway,
-            status: plane.status,
-          });
-        }
-        break;
-      case 'approach':
-        // Only allow approach if plane is in the approach zone
-        if (inApproach) {
-          updated.status = 'approaching';
-          updated.speed = Math.min(updated.speed, 0.4);
-          debugLog(config, 'AI-APPROACH', `${plane.callsign} (${plane.id}) entering approach`, {
-            heading: Math.round(plane.heading),
-            speed: updated.speed.toFixed(2),
-            position: { x: Math.round(plane.position.x), y: Math.round(plane.position.y) },
-            distanceToRunway: distToRunway,
-          });
-        } else {
-          debugLog(config, 'AI-APPROACH-DENIED', `${plane.callsign} (${plane.id}) not in approach zone`, {
-            heading: Math.round(plane.heading),
-            position: { x: Math.round(plane.position.x), y: Math.round(plane.position.y) },
-            distanceToRunway: distToRunway,
-          });
-        }
-        break;
-      case 'hold':
-        // Prevent AI from putting approaching planes in hold pattern
-        if (plane.status === 'approaching') {
-          debugLog(config, 'AI-HOLD-BLOCKED', `${plane.callsign} (${plane.id}) - hold blocked for approaching plane`, {
-            currentHeading: Math.round(plane.heading),
-            status: plane.status,
-          });
-          break;
-        }
-
-        const oldHoldHeading = updated.heading;
-        const oldHoldSpeed = updated.speed;
-
-        // First, check if current heading would take plane into airport zone
-        const airportPrediction = predictAirportZoneEntry(plane, plane.heading, airport, config, 6);
-
-        if (airportPrediction.willEnter) {
-          // URGENT: Plane is heading toward airport zone - immediately turn away
-          const safeHeading = findHeadingAwayFromAirport(plane, airport, config);
-          updated.heading = safeHeading;
-          updated.speed = Math.max(0.15, updated.speed * 0.7); // Slow down more aggressively
-
-          debugLog(config, 'AI-HOLD-EMERGENCY', `${plane.callsign} (${plane.id}) emergency turn - heading toward airport zone`, {
-            oldHeading: Math.round(oldHoldHeading),
-            newHeading: Math.round(updated.heading),
-            framesUntilAirportEntry: airportPrediction.framesUntilEntry,
-            oldSpeed: oldHoldSpeed.toFixed(2),
-            newSpeed: updated.speed.toFixed(2),
-            distanceToRunway: distToRunway,
-          });
-        } else {
-          // Normal hold pattern - gradually turn toward 180° (left, away from runway)
-          const targetHoldHeading = 180;
-          const currentHeading = updated.heading;
-          const diff = targetHoldHeading - currentHeading;
-
-          // Gradually turn toward 180° (15° per update)
-          if (Math.abs(diff) > 15) {
-            updated.heading = normalizeAngle(currentHeading + (diff > 0 ? 15 : -15));
-          } else {
-            updated.heading = targetHoldHeading;
-          }
-          updated.speed = Math.max(0.2, updated.speed * 0.8);
-
-          debugLog(config, 'AI-HOLD', `${plane.callsign} (${plane.id}) holding pattern`, {
-            oldHeading: Math.round(oldHoldHeading),
-            newHeading: Math.round(updated.heading),
-            oldSpeed: oldHoldSpeed.toFixed(2),
-            newSpeed: updated.speed.toFixed(2),
-            distanceToRunway: distToRunway,
-            status: plane.status,
-          });
-        }
-        break;
-    }
-
-    return updated;
-  }, []);
 
   // Check if plane can land
   const checkLanding = useCallback((plane: Plane, airport: Airport): Plane => {
@@ -647,7 +290,7 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
           const updatedPlanes = prev.planes.map(plane => {
             const planeCommand = response.commands.find(c => c.planeId === plane.id);
             if (planeCommand) {
-              return applyCommand(plane, planeCommand, prev.airport, prev.planes);
+              return applyCommand(plane, planeCommand, prev.airport, prev.planes, configRef.current);
             }
             return plane;
           });
@@ -663,7 +306,7 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
     } finally {
       setIsAiProcessing(false);
     }
-  }, [apiKey, gameState.planes, gameState.airport, canvasWidth, canvasHeight, applyCommand, isAiProcessing]);
+  }, [apiKey, gameState.planes, gameState.airport, canvasWidth, canvasHeight, isAiProcessing]);
 
   // Periodic AI calls and plane spawning
   useEffect(() => {
