@@ -38,10 +38,6 @@ function calculateNavigationData(plane: Plane, airport: Airport): NavigationData
   const localY = dx * Math.sin(-runwayAngle) + dy * Math.cos(-runwayAngle);
   const onRunway = localX >= 0 && localX <= runwayLength && Math.abs(localY) <= airport.runwayWidth / 2;
 
-  // Check alignment (heading ~0°)
-  const headingDiff = Math.abs(normalizeAngle(plane.heading) - normalizeAngle(airport.runwayHeading));
-  const alignedForLanding = Math.min(headingDiff, 360 - headingDiff) < 25;
-
   // Approach zone entry point (300px behind runway start)
   const approachZoneEntry: Position = {
     x: airport.runwayStart.x - Math.cos(runwayAngle) * APPROACH_ZONE_LENGTH,
@@ -49,6 +45,14 @@ function calculateNavigationData(plane: Plane, airport: Airport): NavigationData
   };
 
   const inApproachZone = isInApproachZone(plane.position, airport.runwayStart, airport.runwayEnd, airport.runwayWidth);
+
+  // Check alignment: heading must match runway
+  const headingDiff = Math.abs(normalizeAngle(plane.heading) - normalizeAngle(airport.runwayHeading));
+  const headingMatchesRunway = Math.min(headingDiff, 360 - headingDiff) < 25;
+
+  // Only report "aligned for landing" if plane is actually in the approach zone
+  // This prevents confusing the AI when a plane happens to have heading ~0° but is far away
+  const alignedForLanding = inApproachZone && headingMatchesRunway;
 
   return {
     distanceToRunway,
@@ -150,6 +154,7 @@ export async function getAICommands(
   const gameState = {
     planes: activePlanes.map(p => {
       const nav = calculateNavigationData(p, airport);
+      console.log(`[DEBUG] ${p.callsign} nav:`, JSON.stringify(nav));
       return {
         id: p.id,
         callsign: p.callsign,

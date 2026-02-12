@@ -14,6 +14,35 @@ export function distance(p1: Position, p2: Position): number {
   return Math.sqrt((p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2);
 }
 
+// Calculate the shortest distance accounting for wrap-around (toroidal distance)
+export function wrappedDistance(p1: Position, p2: Position, canvasWidth: number, canvasHeight: number): number {
+  const wrapped = getWrappedDelta(p1, p2, canvasWidth, canvasHeight);
+  return Math.sqrt(wrapped.dx ** 2 + wrapped.dy ** 2);
+}
+
+// Get the shortest delta (dx, dy) between two points, accounting for wrap-around
+export function getWrappedDelta(p1: Position, p2: Position, canvasWidth: number, canvasHeight: number): { dx: number; dy: number } {
+  let dx = p2.x - p1.x;
+  let dy = p2.y - p1.y;
+
+  // If going through the wrap boundary is shorter, use that
+  if (Math.abs(dx) > canvasWidth / 2) {
+    dx = dx > 0 ? dx - canvasWidth : dx + canvasWidth;
+  }
+  if (Math.abs(dy) > canvasHeight / 2) {
+    dy = dy > 0 ? dy - canvasHeight : dy + canvasHeight;
+  }
+
+  return { dx, dy };
+}
+
+// Calculate heading from p1 to p2, using the shortest path (accounting for wrap-around)
+export function wrappedHeadingTo(p1: Position, p2: Position, canvasWidth: number, canvasHeight: number): number {
+  const { dx, dy } = getWrappedDelta(p1, p2, canvasWidth, canvasHeight);
+  const rad = Math.atan2(dy, dx);
+  return normalizeAngle((rad * 180) / Math.PI);
+}
+
 export function movePosition(position: Position, heading: number, speed: number): Position {
   const rad = degToRad(heading);
   return {
