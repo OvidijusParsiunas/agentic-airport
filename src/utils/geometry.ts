@@ -64,6 +64,106 @@ export function angleDifference(angle1: number, angle2: number): number {
   return diff;
 }
 
+// Predict future position based on current heading and speed
+export function predictPosition(position: Position, heading: number, speed: number, frames: number): Position {
+  const rad = degToRad(heading);
+  return {
+    x: position.x + Math.cos(rad) * speed * frames,
+    y: position.y + Math.sin(rad) * speed * frames,
+  };
+}
+
+// Check if two planes will collide within a time horizon
+// Returns the predicted collision frame (0 if no collision predicted)
+export function predictCollision(
+  plane1: Plane,
+  plane2: Plane,
+  horizonFrames: number = 300, // ~5 seconds at 60fps
+  collisionDistance: number = 30
+): { willCollide: boolean; framesUntilCollision: number; minDistance: number } {
+  let minDistance = distance(plane1.position, plane2.position);
+  let collisionFrame = 0;
+
+  // Check positions at intervals
+  for (let frame = 30; frame <= horizonFrames; frame += 30) { // Check every 0.5 seconds
+    const pos1 = predictPosition(plane1.position, plane1.heading, plane1.speed, frame);
+    const pos2 = predictPosition(plane2.position, plane2.heading, plane2.speed, frame);
+    const dist = distance(pos1, pos2);
+
+    if (dist < minDistance) {
+      minDistance = dist;
+      collisionFrame = frame;
+    }
+
+    if (dist < collisionDistance) {
+      return { willCollide: true, framesUntilCollision: frame, minDistance: dist };
+    }
+  }
+
+  return { willCollide: minDistance < collisionDistance, framesUntilCollision: collisionFrame, minDistance };
+}
+
+// Detect "tail collision" scenario: faster plane catching up to slower plane on similar heading
+export function detectTailCollision(
+  plane1: Plane,
+  plane2: Plane,
+  headingTolerance: number = 45 // Consider planes on "similar" paths if within this angle
+): { isRisk: boolean; fasterPlane: Plane | null; slowerPlane: Plane | null; catchUpTime: number } {
+  // Check if headings are similar (planes going roughly same direction)
+  const headingDiff = Math.abs(angleDifference(plane1.heading, plane2.heading));
+  if (headingDiff > headingTolerance) {
+    return { isRisk: false, fasterPlane: null, slowerPlane: null, catchUpTime: 0 };
+  }
+
+  // Determine which plane is "behind" the other based on their headings
+  // Project positions onto the average heading direction
+  const avgHeading = (plane1.heading + plane2.heading) / 2;
+  const rad = degToRad(avgHeading);
+
+  // Calculate how far each plane is along the heading direction
+  const proj1 = plane1.position.x * Math.cos(rad) + plane1.position.y * Math.sin(rad);
+  const proj2 = plane2.position.x * Math.cos(rad) + plane2.position.y * Math.sin(rad);
+
+  // Determine which is ahead and which is behind
+  const plane1Ahead = proj1 > proj2;
+  const aheadPlane = plane1Ahead ? plane1 : plane2;
+  const behindPlane = plane1Ahead ? plane2 : plane1;
+
+  // Check if the behind plane is faster (will catch up)
+  if (behindPlane.speed <= aheadPlane.speed) {
+    return { isRisk: false, fasterPlane: null, slowerPlane: null, catchUpTime: 0 };
+  }
+
+  // Calculate lateral distance (perpendicular to heading)
+  const perpRad = degToRad(avgHeading + 90);
+  const lateralDist = Math.abs(
+    (plane2.position.x - plane1.position.x) * Math.cos(perpRad) +
+    (plane2.position.y - plane1.position.y) * Math.sin(perpRad)
+  );
+
+  // If planes are too far apart laterally, no risk
+  if (lateralDist > 60) {
+    return { isRisk: false, fasterPlane: null, slowerPlane: null, catchUpTime: 0 };
+  }
+
+  // Calculate time to catch up
+  const distanceBetween = Math.abs(proj1 - proj2);
+  const speedDiff = behindPlane.speed - aheadPlane.speed;
+  const catchUpFrames = distanceBetween / speedDiff;
+
+  // If catch-up will happen within 10 seconds (600 frames), it's a risk
+  if (catchUpFrames < 600) {
+    return {
+      isRisk: true,
+      fasterPlane: behindPlane,
+      slowerPlane: aheadPlane,
+      catchUpTime: Math.round(catchUpFrames / 60), // Convert to seconds
+    };
+  }
+
+  return { isRisk: false, fasterPlane: null, slowerPlane: null, catchUpTime: 0 };
+}
+
 export function randomInRange(min: number, max: number): number {
   return Math.random() * (max - min) + min;
 }

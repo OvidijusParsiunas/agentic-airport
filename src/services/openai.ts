@@ -1,4 +1,4 @@
-import { isInApproachZone, isOverAirport, distance, normalizeAngle, APPROACH_ZONE_LENGTH } from '../utils/geometry';
+import { isInApproachZone, isOverAirport, distance, normalizeAngle, APPROACH_ZONE_LENGTH, predictCollision, detectTailCollision } from '../utils/geometry';
 import { Plane, Airport, AIResponse, Position, ConversationMessage } from '../types/game';
 
 function calculateHeadingTo(from: Position, to: Position): number {
@@ -70,7 +70,9 @@ interface CollisionRisk {
   plane1: string;
   plane2: string;
   currentDistance: number;
-  riskLevel: 'HIGH' | 'MEDIUM';
+  riskLevel: 'CRITICAL' | 'HIGH' | 'MEDIUM';
+  riskType: 'proximity' | 'predicted' | 'tail_catch_up';
+  details?: string;
 }
 
 function assessCollisionRisks(planes: Plane[]): CollisionRisk[] {
@@ -78,14 +80,46 @@ function assessCollisionRisks(planes: Plane[]): CollisionRisk[] {
 
   for (let i = 0; i < planes.length; i++) {
     for (let j = i + 1; j < planes.length; j++) {
-      const currentDist = distance(planes[i].position, planes[j].position);
+      const p1 = planes[i];
+      const p2 = planes[j];
+      const currentDist = distance(p1.position, p2.position);
 
+      // Immediate proximity risk
       if (currentDist < 60) {
         risks.push({
-          plane1: planes[i].id,
-          plane2: planes[j].id,
+          plane1: p1.id,
+          plane2: p2.id,
           currentDistance: Math.round(currentDist),
-          riskLevel: currentDist < 40 ? 'HIGH' : 'MEDIUM',
+          riskLevel: currentDist < 40 ? 'CRITICAL' : 'HIGH',
+          riskType: 'proximity',
+        });
+        continue; // Don't add duplicate risks for the same pair
+      }
+
+      // Predictive collision detection
+      const prediction = predictCollision(p1, p2, 300, 30); // 5 second horizon
+      if (prediction.willCollide) {
+        risks.push({
+          plane1: p1.id,
+          plane2: p2.id,
+          currentDistance: Math.round(currentDist),
+          riskLevel: prediction.framesUntilCollision < 120 ? 'HIGH' : 'MEDIUM',
+          riskType: 'predicted',
+          details: `Collision predicted in ~${Math.round(prediction.framesUntilCollision / 60)}s`,
+        });
+        continue;
+      }
+
+      // Tail/catch-up collision detection (faster plane behind slower plane)
+      const tailRisk = detectTailCollision(p1, p2, 45);
+      if (tailRisk.isRisk && tailRisk.fasterPlane && tailRisk.slowerPlane) {
+        risks.push({
+          plane1: tailRisk.fasterPlane.id,
+          plane2: tailRisk.slowerPlane.id,
+          currentDistance: Math.round(currentDist),
+          riskLevel: tailRisk.catchUpTime < 5 ? 'HIGH' : 'MEDIUM',
+          riskType: 'tail_catch_up',
+          details: `${tailRisk.fasterPlane.id} (speed ${tailRisk.fasterPlane.speed.toFixed(2)}) catching up to ${tailRisk.slowerPlane.id} (speed ${tailRisk.slowerPlane.speed.toFixed(2)}) in ~${tailRisk.catchUpTime}s. SLOW DOWN the faster plane or SPEED UP the slower plane.`,
         });
       }
     }
@@ -101,6 +135,14 @@ const SYSTEM_PROMPT = `You are an AI air traffic controller. Guide planes to lan
 2. Planes with "approaching" status are SAFE over the airport. They MUST continue straight to land - NEVER hold or turn away.
 3. Only ONE plane approaches at a time. Others must hold/wait.
 4. Planes land from the LEFT (heading ~0°).
+
+## COLLISION AVOIDANCE (HIGHEST PRIORITY)
+When collisionRisks is present in the game state, you MUST address them IMMEDIATELY:
+- **CRITICAL/HIGH proximity**: Planes are dangerously close. Turn one plane away (add 90° to heading) OR slow one down.
+- **predicted**: Planes will collide if they maintain current course. Change heading or speed of at least one plane.
+- **tail_catch_up**: A faster plane is catching up to a slower plane on a similar heading. Either SLOW DOWN the faster plane or SPEED UP the slower plane to maintain separation. This is common when planes are "idle" - always check relative speeds!
+
+IMPORTANT: If two planes are flying in the same direction, ensure the plane behind is NOT faster than the plane ahead. Match speeds or separate them.
 
 ## NAVIGATION DATA
 - headingToApproachEntry: Heading to approach zone entry point (use when NOT in approach zone)
@@ -125,6 +167,7 @@ const SYSTEM_PROMPT = `You are an AI air traffic controller. Guide planes to lan
 - NEVER issue "hold" or "turn" to an "approaching" plane. Let it land.
 - Ignore "overAirportZone" for approaching planes - they are allowed there.
 - When inApproachZone=true, ALWAYS turn to heading 0° (runway heading), NEVER turn away from runway.
+- Always issue commands for ALL planes, not just one. Check every plane's situation.
 
 ## RESPONSE FORMAT
 {
