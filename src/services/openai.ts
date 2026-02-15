@@ -1,10 +1,5 @@
-import { isInApproachZone, isOverAirport, distance, normalizeAngle, APPROACH_ZONE_LENGTH, predictCollision, detectTailCollision } from '../utils/geometry';
+import { isInApproachZone, isOverAirport, distance, normalizeAngle, APPROACH_ZONE_LENGTH, predictCollision, detectTailCollision, wrappedHeadingTo, wrappedDistance } from '../utils/geometry';
 import { Plane, Airport, AIResponse, Position, ConversationMessage } from '../types/game';
-
-function calculateHeadingTo(from: Position, to: Position): number {
-  const rad = Math.atan2(to.y - from.y, to.x - from.x);
-  return normalizeAngle((rad * 180) / Math.PI);
-}
 
 interface NavigationData {
   headingToApproachEntry: number;  // Heading to approach zone entry (use when far away)
@@ -17,13 +12,14 @@ interface NavigationData {
   overAirportZone: boolean;
 }
 
-function calculateNavigationData(plane: Plane, airport: Airport): NavigationData {
+function calculateNavigationData(plane: Plane, airport: Airport, canvasWidth: number, canvasHeight: number): NavigationData {
   const runwayCenter: Position = {
     x: (airport.runwayStart.x + airport.runwayEnd.x) / 2,
     y: (airport.runwayStart.y + airport.runwayEnd.y) / 2,
   };
 
-  const distanceToRunway = Math.round(distance(plane.position, runwayCenter));
+  // Use wrapped distance to account for canvas wrap-around
+  const distanceToRunway = Math.round(wrappedDistance(plane.position, runwayCenter, canvasWidth, canvasHeight));
 
   // Check if on runway
   const runwayLength = distance(airport.runwayStart, airport.runwayEnd);
@@ -56,9 +52,10 @@ function calculateNavigationData(plane: Plane, airport: Airport): NavigationData
 
   return {
     distanceToRunway,
-    headingToApproachEntry: Math.round(calculateHeadingTo(plane.position, approachZoneEntry)),
-    distanceToApproachEntry: Math.round(distance(plane.position, approachZoneEntry)),
-    headingToRunway: Math.round(calculateHeadingTo(plane.position, runwayCenter)),
+    // Use wrapped heading/distance to account for canvas wrap-around
+    headingToApproachEntry: Math.round(wrappedHeadingTo(plane.position, approachZoneEntry, canvasWidth, canvasHeight)),
+    distanceToApproachEntry: Math.round(wrappedDistance(plane.position, approachZoneEntry, canvasWidth, canvasHeight)),
+    headingToRunway: Math.round(wrappedHeadingTo(plane.position, runwayCenter, canvasWidth, canvasHeight)),
     inApproachZone,
     onRunway,
     alignedForLanding,
@@ -75,14 +72,15 @@ interface CollisionRisk {
   details?: string;
 }
 
-function assessCollisionRisks(planes: Plane[]): CollisionRisk[] {
+function assessCollisionRisks(planes: Plane[], canvasWidth: number, canvasHeight: number): CollisionRisk[] {
   const risks: CollisionRisk[] = [];
 
   for (let i = 0; i < planes.length; i++) {
     for (let j = i + 1; j < planes.length; j++) {
       const p1 = planes[i];
       const p2 = planes[j];
-      const currentDist = distance(p1.position, p2.position);
+      // Use wrapped distance to account for canvas wrap-around
+      const currentDist = wrappedDistance(p1.position, p2.position, canvasWidth, canvasHeight);
 
       // Immediate proximity risk
       if (currentDist < 60) {
@@ -97,7 +95,7 @@ function assessCollisionRisks(planes: Plane[]): CollisionRisk[] {
       }
 
       // Predictive collision detection
-      const prediction = predictCollision(p1, p2, 300, 30); // 5 second horizon
+      const prediction = predictCollision(p1, p2, canvasWidth, canvasHeight, 300, 30); // 5 second horizon
       if (prediction.willCollide) {
         risks.push({
           plane1: p1.id,
@@ -111,7 +109,7 @@ function assessCollisionRisks(planes: Plane[]): CollisionRisk[] {
       }
 
       // Tail/catch-up collision detection (faster plane behind slower plane)
-      const tailRisk = detectTailCollision(p1, p2, 45);
+      const tailRisk = detectTailCollision(p1, p2, canvasWidth, canvasHeight, 45);
       if (tailRisk.isRisk && tailRisk.fasterPlane && tailRisk.slowerPlane) {
         risks.push({
           plane1: tailRisk.fasterPlane.id,
@@ -167,7 +165,6 @@ IMPORTANT: If two planes are flying in the same direction, ensure the plane behi
 - NEVER issue "hold" or "turn" to an "approaching" plane. Let it land.
 - Ignore "overAirportZone" for approaching planes - they are allowed there.
 - When inApproachZone=true, ALWAYS turn to heading 0° (runway heading), NEVER turn away from runway.
-- Always issue commands for ALL planes, not just one. Check every plane's situation.
 
 ## RESPONSE FORMAT
 {
@@ -192,11 +189,11 @@ export async function getAICommands(
     };
   }
 
-  const collisionRisks = assessCollisionRisks(activePlanes);
+  const collisionRisks = assessCollisionRisks(activePlanes, canvasWidth, canvasHeight);
 
   const gameState = {
     planes: activePlanes.map(p => {
-      const nav = calculateNavigationData(p, airport);
+      const nav = calculateNavigationData(p, airport, canvasWidth, canvasHeight);
       console.log(`[DEBUG] ${p.callsign} nav:`, JSON.stringify(nav));
       return {
         id: p.id,

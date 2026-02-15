@@ -1,5 +1,5 @@
+import { normalizeAngle, isOverAirport, wrappedDistance } from './geometry';
 import { Plane, Airport, GameConfig } from '../types/game';
-import { normalizeAngle, isOverAirport } from './geometry';
 
 // Predictive collision detection - checks if a plane with a new heading would collide with other planes
 export interface CollisionPrediction {
@@ -14,6 +14,8 @@ export function predictCollision(
   newHeading: number,
   allPlanes: Plane[],
   config: GameConfig,
+  canvasWidth: number,
+  canvasHeight: number,
   secondsAhead: number = 8
 ): CollisionPrediction {
   const fps = 60;
@@ -41,9 +43,12 @@ export function predictCollision(
       const otherSimX = other.position.x + Math.cos(otherHeadingRad) * otherSpeed * frame;
       const otherSimY = other.position.y + Math.sin(otherHeadingRad) * otherSpeed * frame;
 
-      // Calculate distance between simulated positions
-      const dist = Math.sqrt(
-        Math.pow(simX - otherSimX, 2) + Math.pow(simY - otherSimY, 2)
+      // Calculate distance between simulated positions using wrapped distance
+      const dist = wrappedDistance(
+        { x: simX, y: simY },
+        { x: otherSimX, y: otherSimY },
+        canvasWidth,
+        canvasHeight
       );
 
       if (dist < collisionThreshold) {
@@ -65,14 +70,16 @@ export function findSafeHeading(
   plane: Plane,
   requestedHeading: number,
   allPlanes: Plane[],
-  config: GameConfig
+  config: GameConfig,
+  canvasWidth: number,
+  canvasHeight: number
 ): number | null {
   // Try adjustments in both directions, starting small
   const adjustments = [30, -30, 60, -60, 90, -90, 120, -120, 150, -150, 180];
 
   for (const adjustment of adjustments) {
     const alternativeHeading = normalizeAngle(requestedHeading + adjustment);
-    const prediction = predictCollision(plane, alternativeHeading, allPlanes, config);
+    const prediction = predictCollision(plane, alternativeHeading, allPlanes, config, canvasWidth, canvasHeight);
     if (!prediction.willCollide) {
       return alternativeHeading;
     }

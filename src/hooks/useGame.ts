@@ -176,7 +176,7 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
       // Check for collisions
       for (let i = 0; i < newPlanes.length; i++) {
         for (let j = i + 1; j < newPlanes.length; j++) {
-          if (checkCollision(newPlanes[i], newPlanes[j])) {
+          if (checkCollision(newPlanes[i], newPlanes[j], prev.canvasWidth, prev.canvasHeight)) {
             if (newPlanes[i].status !== 'crashed' && newPlanes[j].status !== 'crashed') {
               debugLog(configRef.current, 'CRASH-COLLISION', `${newPlanes[i].callsign} collided with ${newPlanes[j].callsign}`, {
                 plane1: {
@@ -290,7 +290,7 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
           const updatedPlanes = prev.planes.map(plane => {
             const planeCommand = response.commands.find(c => c.planeId === plane.id);
             if (planeCommand) {
-              return applyCommand(plane, planeCommand, prev.airport, prev.planes, configRef.current);
+              return applyCommand(plane, planeCommand, prev.airport, prev.planes, configRef.current, prev.canvasWidth, prev.canvasHeight);
             }
             return plane;
           });

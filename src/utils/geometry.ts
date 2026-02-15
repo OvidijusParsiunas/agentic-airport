@@ -21,17 +21,21 @@ export function wrappedDistance(p1: Position, p2: Position, canvasWidth: number,
 }
 
 // Get the shortest delta (dx, dy) between two points, accounting for wrap-around
+// Uses hysteresis to prevent oscillation when paths are nearly equal
 export function getWrappedDelta(p1: Position, p2: Position, canvasWidth: number, canvasHeight: number): { dx: number; dy: number } {
-  let dx = p2.x - p1.x;
-  let dy = p2.y - p1.y;
+  const directDx = p2.x - p1.x;
+  const directDy = p2.y - p1.y;
 
-  // If going through the wrap boundary is shorter, use that
-  if (Math.abs(dx) > canvasWidth / 2) {
-    dx = dx > 0 ? dx - canvasWidth : dx + canvasWidth;
-  }
-  if (Math.abs(dy) > canvasHeight / 2) {
-    dy = dy > 0 ? dy - canvasHeight : dy + canvasHeight;
-  }
+  // Calculate wrapped deltas
+  const wrappedDx = directDx > 0 ? directDx - canvasWidth : directDx + canvasWidth;
+  const wrappedDy = directDy > 0 ? directDy - canvasHeight : directDy + canvasHeight;
+
+  // Only use wrapped path if it's significantly shorter (at least 20% shorter)
+  // This prevents oscillation when paths are nearly equal
+  const hysteresisMargin = 0.8; // Wrapped path must be 80% or less of direct path
+
+  const dx = Math.abs(wrappedDx) < Math.abs(directDx) * hysteresisMargin ? wrappedDx : directDx;
+  const dy = Math.abs(wrappedDy) < Math.abs(directDy) * hysteresisMargin ? wrappedDy : directDy;
 
   return { dx, dy };
 }
@@ -51,10 +55,10 @@ export function movePosition(position: Position, heading: number, speed: number)
   };
 }
 
-export function checkCollision(plane1: Plane, plane2: Plane, minDistance: number = 30): boolean {
+export function checkCollision(plane1: Plane, plane2: Plane, canvasWidth: number, canvasHeight: number, minDistance: number = 30): boolean {
   if (plane1.status === 'landed' || plane2.status === 'landed') return false;
   if (plane1.status === 'crashed' || plane2.status === 'crashed') return false;
-  return distance(plane1.position, plane2.position) < minDistance;
+  return wrappedDistance(plane1.position, plane2.position, canvasWidth, canvasHeight) < minDistance;
 }
 
 export function angleDifference(angle1: number, angle2: number): number {
@@ -78,17 +82,20 @@ export function predictPosition(position: Position, heading: number, speed: numb
 export function predictCollision(
   plane1: Plane,
   plane2: Plane,
+  canvasWidth: number,
+  canvasHeight: number,
   horizonFrames: number = 300, // ~5 seconds at 60fps
   collisionDistance: number = 30
 ): { willCollide: boolean; framesUntilCollision: number; minDistance: number } {
-  let minDistance = distance(plane1.position, plane2.position);
+  let minDistance = wrappedDistance(plane1.position, plane2.position, canvasWidth, canvasHeight);
   let collisionFrame = 0;
 
   // Check positions at intervals
   for (let frame = 30; frame <= horizonFrames; frame += 30) { // Check every 0.5 seconds
     const pos1 = predictPosition(plane1.position, plane1.heading, plane1.speed, frame);
     const pos2 = predictPosition(plane2.position, plane2.heading, plane2.speed, frame);
-    const dist = distance(pos1, pos2);
+    // Use wrapped distance to account for canvas wrap-around
+    const dist = wrappedDistance(pos1, pos2, canvasWidth, canvasHeight);
 
     if (dist < minDistance) {
       minDistance = dist;
@@ -107,6 +114,8 @@ export function predictCollision(
 export function detectTailCollision(
   plane1: Plane,
   plane2: Plane,
+  canvasWidth: number,
+  canvasHeight: number,
   headingTolerance: number = 45 // Consider planes on "similar" paths if within this angle
 ): { isRisk: boolean; fasterPlane: Plane | null; slowerPlane: Plane | null; catchUpTime: number } {
   // Check if headings are similar (planes going roughly same direction)
@@ -115,17 +124,20 @@ export function detectTailCollision(
     return { isRisk: false, fasterPlane: null, slowerPlane: null, catchUpTime: 0 };
   }
 
+  // Use wrapped delta to account for canvas wrap-around
+  const { dx, dy } = getWrappedDelta(plane1.position, plane2.position, canvasWidth, canvasHeight);
+
   // Determine which plane is "behind" the other based on their headings
-  // Project positions onto the average heading direction
+  // Project the delta onto the average heading direction
   const avgHeading = (plane1.heading + plane2.heading) / 2;
   const rad = degToRad(avgHeading);
 
-  // Calculate how far each plane is along the heading direction
-  const proj1 = plane1.position.x * Math.cos(rad) + plane1.position.y * Math.sin(rad);
-  const proj2 = plane2.position.x * Math.cos(rad) + plane2.position.y * Math.sin(rad);
+  // Calculate relative position along the heading direction
+  // Positive means plane2 is ahead of plane1
+  const projDelta = dx * Math.cos(rad) + dy * Math.sin(rad);
 
   // Determine which is ahead and which is behind
-  const plane1Ahead = proj1 > proj2;
+  const plane1Ahead = projDelta < 0;
   const aheadPlane = plane1Ahead ? plane1 : plane2;
   const behindPlane = plane1Ahead ? plane2 : plane1;
 
@@ -136,10 +148,7 @@ export function detectTailCollision(
 
   // Calculate lateral distance (perpendicular to heading)
   const perpRad = degToRad(avgHeading + 90);
-  const lateralDist = Math.abs(
-    (plane2.position.x - plane1.position.x) * Math.cos(perpRad) +
-    (plane2.position.y - plane1.position.y) * Math.sin(perpRad)
-  );
+  const lateralDist = Math.abs(dx * Math.cos(perpRad) + dy * Math.sin(perpRad));
 
   // If planes are too far apart laterally, no risk
   if (lateralDist > 60) {
@@ -147,7 +156,7 @@ export function detectTailCollision(
   }
 
   // Calculate time to catch up
-  const distanceBetween = Math.abs(proj1 - proj2);
+  const distanceBetween = Math.abs(projDelta);
   const speedDiff = behindPlane.speed - aheadPlane.speed;
   const catchUpFrames = distanceBetween / speedDiff;
 

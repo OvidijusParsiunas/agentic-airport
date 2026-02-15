@@ -14,7 +14,9 @@ export function applyCommand(
   command: AICommand,
   airport: Airport,
   allPlanes: Plane[],
-  config: GameConfig
+  config: GameConfig,
+  canvasWidth: number,
+  canvasHeight: number
 ): Plane {
   const updated = { ...plane };
 
@@ -45,7 +47,7 @@ export function applyCommand(
         let newHeading = normalizeAngle(command.value);
 
         // Predictive collision detection - check if this turn would cause a collision
-        const prediction = predictCollision(plane, newHeading, allPlanes, config);
+        const prediction = predictCollision(plane, newHeading, allPlanes, config, canvasWidth, canvasHeight);
         if (prediction.willCollide && prediction.collidingPlane) {
           debugLog(config, 'AI-TURN-COLLISION-PREDICTED', `${plane.callsign} (${plane.id}) - turn would collide with ${prediction.collidingPlane.callsign}`, {
             requestedHeading: Math.round(newHeading),
@@ -56,7 +58,7 @@ export function applyCommand(
           });
 
           // Try to find a safe alternative heading
-          const safeHeading = findSafeHeading(plane, newHeading, allPlanes, config);
+          const safeHeading = findSafeHeading(plane, newHeading, allPlanes, config, canvasWidth, canvasHeight);
           if (safeHeading !== null) {
             debugLog(config, 'AI-TURN-REDIRECTED', `${plane.callsign} (${plane.id}) - redirecting to safe heading`, {
               originalHeading: Math.round(newHeading),
@@ -87,7 +89,7 @@ export function applyCommand(
             // Try to find a heading away from the airport
             const safeHeading = findHeadingAwayFromAirport(plane, airport, config);
             // Verify the safe heading also doesn't cause a collision
-            const collisionCheck = predictCollision(plane, safeHeading, allPlanes, config);
+            const collisionCheck = predictCollision(plane, safeHeading, allPlanes, config, canvasWidth, canvasHeight);
             if (!collisionCheck.willCollide) {
               debugLog(config, 'AI-TURN-REDIRECTED-AIRPORT', `${plane.callsign} (${plane.id}) - redirecting away from airport`, {
                 originalHeading: Math.round(newHeading),
