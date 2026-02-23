@@ -10,6 +10,8 @@ interface NavigationData {
   onRunway: boolean;
   alignedForLanding: boolean;
   overAirportZone: boolean;
+  headingError: number;            // How many degrees off the plane is from where it should be heading
+  isHeadingTowardApproach: boolean; // True if plane is heading roughly toward approach entry
 }
 
 function calculateNavigationData(plane: Plane, airport: Airport, canvasWidth: number, canvasHeight: number): NavigationData {
@@ -50,16 +52,31 @@ function calculateNavigationData(plane: Plane, airport: Airport, canvasWidth: nu
   // This prevents confusing the AI when a plane happens to have heading ~0° but is far away
   const alignedForLanding = inApproachZone && headingMatchesRunway;
 
+  // Calculate heading to approach entry
+  const headingToApproachEntry = Math.round(wrappedHeadingTo(plane.position, approachZoneEntry, canvasWidth, canvasHeight));
+
+  // Calculate heading error: how far off is the plane from its target heading?
+  // When not in approach zone, target is the approach entry
+  // When in approach zone, target is runway heading (0°)
+  const targetHeading = inApproachZone ? airport.runwayHeading : headingToApproachEntry;
+  const headingErrorRaw = Math.abs(normalizeAngle(plane.heading) - normalizeAngle(targetHeading));
+  const headingError = Math.round(Math.min(headingErrorRaw, 360 - headingErrorRaw));
+
+  // Is the plane heading roughly toward the approach entry? (within 45 degrees)
+  const isHeadingTowardApproach = headingError < 45;
+
   return {
     distanceToRunway,
     // Use wrapped heading/distance to account for canvas wrap-around
-    headingToApproachEntry: Math.round(wrappedHeadingTo(plane.position, approachZoneEntry, canvasWidth, canvasHeight)),
+    headingToApproachEntry,
     distanceToApproachEntry: Math.round(wrappedDistance(plane.position, approachZoneEntry, canvasWidth, canvasHeight)),
     headingToRunway: Math.round(wrappedHeadingTo(plane.position, runwayCenter, canvasWidth, canvasHeight)),
     inApproachZone,
     onRunway,
     alignedForLanding,
     overAirportZone: isOverAirport(plane.position, airport.runwayStart, airport.runwayEnd, airport.runwayWidth),
+    headingError,
+    isHeadingTowardApproach,
   };
 }
 
@@ -143,17 +160,26 @@ When collisionRisks is present in the game state, you MUST address them IMMEDIAT
 IMPORTANT: If two planes are flying in the same direction, ensure the plane behind is NOT faster than the plane ahead. Match speeds or separate them.
 
 ## NAVIGATION DATA
-- headingToApproachEntry: Heading to approach zone entry point (use when NOT in approach zone)
-- headingToRunway: Direct heading to runway center
+- headingToApproachEntry: The heading the plane MUST turn to in order to reach the approach zone entry
+- headingToRunway: The heading to fly directly toward runway center
 - inApproachZone: True when plane is in the landing corridor
-- alignedForLanding: True when heading is within 25° of runway heading (0°)
+- alignedForLanding: True ONLY when plane is in approach zone AND heading matches runway (0°)
+- distanceToRunway: Distance to runway center - WARNING: a small distance does NOT mean aligned! The plane could be beside/past the runway heading away.
+- headingError: How many degrees the plane needs to turn to reach its target (approach entry or runway). HIGH VALUES MEAN THE PLANE IS OFF COURSE!
+- isHeadingTowardApproach: FALSE means the plane is NOT heading toward the approach zone and MUST turn!
 
 ## LANDING STEPS
-1. When inApproachZone=false: Turn toward headingToApproachEntry to reach the approach zone
+1. **CRITICAL**: When inApproachZone=false, compare current heading to headingToApproachEntry. If they differ significantly, TURN the plane to headingToApproachEntry. A plane with heading 0° when headingToApproachEntry is 170° is flying AWAY from the approach!
 2. When inApproachZone=true: Turn to runway heading (0°) - DO NOT use headingToApproachEntry (it points backward!)
 3. When inApproachZone=true AND alignedForLanding=true (heading ~0°), issue "approach"
 4. Once "approaching": maintain heading ~0° and speed ≤0.3. Do NOT change course.
 5. Plane lands automatically when: approaching + onRunway + speed<0.5
+
+## COMMON MISTAKE TO AVOID
+If a plane has heading ~0° but inApproachZone=false and alignedForLanding=false, it is NOT ready to land!
+- Check isHeadingTowardApproach: if FALSE, the plane MUST turn to headingToApproachEntry immediately!
+- Check headingError: if > 45°, the plane is significantly off course and needs to turn.
+- A plane near the runway but with isHeadingTowardApproach=false is flying AWAY and will miss the landing!
 
 ## COMMANDS
 - turn: Set heading (0=right, 90=down, 180=left, 270=up)

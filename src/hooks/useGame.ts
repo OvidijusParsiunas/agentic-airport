@@ -287,14 +287,24 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
         });
 
         setGameState(prev => {
-          const updatedPlanes = prev.planes.map(plane => {
-            const planeCommand = response.commands.find(c => c.planeId === plane.id);
-            if (planeCommand) {
-              return applyCommand(plane, planeCommand, prev.airport, prev.planes, configRef.current, prev.canvasWidth, prev.canvasHeight);
+          // Apply commands sequentially so each collision prediction sees updated headings
+          // This prevents the bug where two planes are given converging headings in the same batch
+          let currentPlanes = [...prev.planes];
+
+          for (const command of response.commands) {
+            const planeIndex = currentPlanes.findIndex(p => p.id === command.planeId);
+            if (planeIndex !== -1) {
+              const plane = currentPlanes[planeIndex];
+              const updatedPlane = applyCommand(plane, command, prev.airport, currentPlanes, configRef.current, prev.canvasWidth, prev.canvasHeight);
+              currentPlanes = [
+                ...currentPlanes.slice(0, planeIndex),
+                updatedPlane,
+                ...currentPlanes.slice(planeIndex + 1),
+              ];
             }
-            return plane;
-          });
-          return { ...prev, planes: updatedPlanes };
+          }
+
+          return { ...prev, planes: currentPlanes };
         });
       }
     } catch (error) {
