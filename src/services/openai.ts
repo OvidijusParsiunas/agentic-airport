@@ -168,18 +168,24 @@ IMPORTANT: If two planes are flying in the same direction, ensure the plane behi
 - headingError: How many degrees the plane needs to turn to reach its target (approach entry or runway). HIGH VALUES MEAN THE PLANE IS OFF COURSE!
 - isHeadingTowardApproach: FALSE means the plane is NOT heading toward the approach zone and MUST turn!
 
-## LANDING STEPS
-1. **CRITICAL**: When inApproachZone=false, compare current heading to headingToApproachEntry. If they differ significantly, TURN the plane to headingToApproachEntry. A plane with heading 0° when headingToApproachEntry is 170° is flying AWAY from the approach!
-2. When inApproachZone=true: Turn to runway heading (0°) - DO NOT use headingToApproachEntry (it points backward!)
-3. When inApproachZone=true AND alignedForLanding=true (heading ~0°), issue "approach"
-4. Once "approaching": maintain heading ~0° and speed ≤0.3. Do NOT change course.
-5. Plane lands automatically when: approaching + onRunway + speed<0.5
+## TWO-PHASE LANDING APPROACH (CRITICAL!)
+Landing is a TWO-PHASE process. DO NOT mix them up!
 
-## COMMON MISTAKE TO AVOID
-If a plane has heading ~0° but inApproachZone=false and alignedForLanding=false, it is NOT ready to land!
-- Check isHeadingTowardApproach: if FALSE, the plane MUST turn to headingToApproachEntry immediately!
-- Check headingError: if > 45°, the plane is significantly off course and needs to turn.
-- A plane near the runway but with isHeadingTowardApproach=false is flying AWAY and will miss the landing!
+**PHASE 1: FLY TO APPROACH ENTRY** (when inApproachZone=false)
+- Turn the plane to headingToApproachEntry and KEEP that heading
+- DO NOT turn to runway heading (0°) yet - the plane is not at the approach zone!
+- Keep flying until inApproachZone becomes TRUE
+- If isHeadingTowardApproach=true, MAINTAIN current heading - do not change it!
+
+**PHASE 2: ALIGN WITH RUNWAY** (when inApproachZone=true)
+- NOW turn to runway heading (0°)
+- Once heading is ~0° AND alignedForLanding=true, issue "approach" command
+
+## CRITICAL MISTAKE TO AVOID - OSCILLATION
+If you turn a plane to headingToApproachEntry, then immediately turn it to runway heading, then back - you cause OSCILLATION!
+- When inApproachZone=false: ONLY use headingToApproachEntry. NEVER turn to 0° or 180° or runway heading!
+- When isHeadingTowardApproach=true: KEEP the current heading. The plane is on the right path - let it fly!
+- Only turn to runway heading AFTER inApproachZone becomes true.
 
 ## COMMANDS
 - turn: Set heading (0=right, 90=down, 180=left, 270=up)

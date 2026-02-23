@@ -1,5 +1,5 @@
 import { Plane, Airport, AICommand, GameConfig } from '../types/game';
-import { normalizeAngle, isInApproachZone } from './geometry';
+import { normalizeAngle, isInApproachZone, wrappedHeadingTo, APPROACH_ZONE_LENGTH, angleDifference } from './geometry';
 import { debugLog } from './debug';
 import {
   predictCollision,
@@ -7,6 +7,19 @@ import {
   predictAirportZoneEntry,
   findHeadingAwayFromAirport,
 } from './flightPrediction';
+
+// Calculate heading to approach entry point
+function getHeadingToApproachEntry(plane: Plane, airport: Airport, canvasWidth: number, canvasHeight: number): number {
+  const runwayAngle = Math.atan2(
+    airport.runwayEnd.y - airport.runwayStart.y,
+    airport.runwayEnd.x - airport.runwayStart.x
+  );
+  const approachEntry = {
+    x: airport.runwayStart.x - Math.cos(runwayAngle) * APPROACH_ZONE_LENGTH,
+    y: airport.runwayStart.y - Math.sin(runwayAngle) * APPROACH_ZONE_LENGTH,
+  };
+  return wrappedHeadingTo(plane.position, approachEntry, canvasWidth, canvasHeight);
+}
 
 // Apply AI command to a plane
 export function applyCommand(
@@ -45,6 +58,27 @@ export function applyCommand(
       if (command.value !== undefined) {
         const oldHeading = plane.heading;
         let newHeading = normalizeAngle(command.value);
+
+        // Anti-oscillation check: When NOT in approach zone and heading toward approach entry,
+        // block large turns that would take the plane away from the approach
+        if (!inApproach && plane.status === 'flying') {
+          const headingToApproach = getHeadingToApproachEntry(plane, airport, canvasWidth, canvasHeight);
+          const currentErrorToApproach = Math.abs(angleDifference(oldHeading, headingToApproach));
+          const newErrorToApproach = Math.abs(angleDifference(newHeading, headingToApproach));
+
+          // If plane is heading toward approach (error < 45°) and the new heading
+          // would significantly increase the error (by > 50°), block the turn
+          if (currentErrorToApproach < 45 && newErrorToApproach > currentErrorToApproach + 50) {
+            debugLog(config, 'AI-TURN-OSCILLATION-BLOCKED', `${plane.callsign} (${plane.id}) - blocking turn that would cause oscillation`, {
+              requestedHeading: Math.round(newHeading),
+              currentHeading: Math.round(oldHeading),
+              headingToApproach: Math.round(headingToApproach),
+              currentErrorToApproach: Math.round(currentErrorToApproach),
+              newErrorToApproach: Math.round(newErrorToApproach),
+            });
+            break;
+          }
+        }
 
         // Predictive collision detection - check if this turn would cause a collision
         const prediction = predictCollision(plane, newHeading, allPlanes, config, canvasWidth, canvasHeight);
