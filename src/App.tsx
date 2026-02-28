@@ -76,7 +76,29 @@ function App() {
 
         <aside className="sidebar">
           <div className="sidebar-section">
-            <h3>OpenAI API Key</h3>
+            <h3>
+              OpenAI API Key
+              <span className="info-icon-wrapper">
+                <svg
+                  className="info-icon"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="12" y1="16" x2="12" y2="12" />
+                  <line x1="12" y1="8" x2="12.01" y2="8" />
+                </svg>
+                <span className="info-tooltip">
+                  Your API key is not stored on any server. It communicates directly from your computer to OpenAI.
+                </span>
+              </span>
+            </h3>
             <input
               type="password"
               className="api-key-input"

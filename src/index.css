@@ -259,3 +259,47 @@ body {
 .status-indicator.disconnected {
   background: #f87171;
 }
+
+.info-icon-wrapper {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  cursor: help;
+}
+
+.info-icon {
+  color: #64748b;
+  transition: color 0.2s;
+}
+
+.info-icon-wrapper:hover .info-icon {
+  color: #94a3b8;
+}
+
+.info-tooltip {
+  position: fixed;
+  right: 16px;
+  width: 280px;
+  background: #1a2744;
+  border: 1px solid #2a3f5f;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: #e5e7eb;
+  text-transform: none;
+  letter-spacing: normal;
+  line-height: 1.4;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s, visibility 0.2s;
+  z-index: 1000;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  margin-top: 8px;
+}
+
+.info-icon-wrapper:hover .info-tooltip {
+  opacity: 1;
+  visibility: visible;
+}
