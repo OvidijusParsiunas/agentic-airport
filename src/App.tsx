@@ -241,8 +241,7 @@ function App() {
 
           <div className="sidebar-section">
             <h3>Active Planes</h3>
-          </div>
-          <div className="plane-list">
+            <div className="plane-list">
             {gameState.planes.map(plane => (
               <div key={plane.id} className={`plane-item ${plane.status}`}>
                 <div className="plane-callsign" style={{ color: plane.color }}>
@@ -255,12 +254,12 @@ function App() {
                 </div>
               </div>
             ))}
+            </div>
           </div>
 
           <div className="sidebar-section">
             <h3>AI Log</h3>
-          </div>
-          <div className="ai-log">
+            <div className="ai-log">
             {aiLog.length === 0 ? (
               <div className="ai-log-entry">
                 AI will analyze the situation every 10 seconds...
@@ -273,6 +272,7 @@ function App() {
                 </div>
               ))
             )}
+            </div>
           </div>
         </aside>
       </div>
