@@ -303,3 +303,149 @@ body {
   opacity: 1;
   visibility: visible;
 }
+
+/* Settings Panel */
+.sidebar-section h3 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.settings-toggle {
+  background: none;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.settings-toggle:hover {
+  background: #1a2744;
+  color: #94a3b8;
+}
+
+.settings-toggle svg {
+  transition: transform 0.3s ease;
+}
+
+.settings-toggle .settings-icon-active {
+  transform: rotate(90deg);
+  color: #3b82f6;
+}
+
+.settings-panel {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.3s ease-out;
+  background: #0a1628;
+  border-bottom: 1px solid transparent;
+}
+
+.settings-panel.open {
+  max-height: 400px;
+  border-bottom-color: #2a3f5f;
+}
+
+.settings-content {
+  padding: 12px 16px;
+}
+
+.setting-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.setting-item:last-child {
+  margin-bottom: 0;
+}
+
+.setting-item label {
+  font-size: 0.75rem;
+  color: #94a3b8;
+}
+
+.setting-item input[type="number"] {
+  width: 80px;
+  padding: 6px 8px;
+  background: #1a2744;
+  border: 1px solid #2a3f5f;
+  border-radius: 4px;
+  color: #e5e7eb;
+  font-size: 0.75rem;
+  text-align: right;
+}
+
+.setting-item input[type="number"]:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+
+.range-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.range-input input[type="range"] {
+  width: 80px;
+  height: 4px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: #2a3f5f;
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.range-input input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  background: #3b82f6;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.range-input input[type="range"]::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  background: #3b82f6;
+  border-radius: 50%;
+  cursor: pointer;
+  border: none;
+}
+
+.range-input span {
+  font-size: 0.75rem;
+  color: #60a5fa;
+  min-width: 32px;
+  text-align: right;
+}
+
+.toggle-btn {
+  padding: 4px 12px;
+  border: 1px solid #2a3f5f;
+  border-radius: 4px;
+  background: #1a2744;
+  color: #64748b;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.toggle-btn:hover {
+  border-color: #3b82f6;
+}
+
+.toggle-btn.active {
+  background: #3b82f6;
+  border-color: #3b82f6;
+  color: white;
+}

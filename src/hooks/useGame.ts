@@ -6,7 +6,7 @@ import { getAICommands } from '../services/openai';
 import { debugLog } from '../utils/debug';
 import { applyCommand } from '../utils/commandHandler';
 
-const DEFAULT_CONFIG: GameConfig = {
+export const DEFAULT_CONFIG: GameConfig = {
   initialPlaneCount: 4,
   aiUpdateInterval: 5000,
   spawnInterval: 20000,
@@ -44,11 +44,22 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
 
   const [aiLog, setAiLog] = useState<Array<{ time: string; message: string }>>([]);
   const [isAiProcessing, setIsAiProcessing] = useState(false);
+  const [config, setConfig] = useState<GameConfig>(DEFAULT_CONFIG);
   const lastAiCallRef = useRef<number>(0);
   const lastSpawnRef = useRef<number>(0);
-  const configRef = useRef<GameConfig>(DEFAULT_CONFIG);
+  const configRef = useRef<GameConfig>(config);
   // Conversation history for continuous AI context
   const conversationHistoryRef = useRef<ConversationMessage[]>([]);
+
+  // Keep configRef in sync with config state
+  useEffect(() => {
+    configRef.current = config;
+  }, [config]);
+
+  // Update config function
+  const updateConfig = useCallback((updates: Partial<GameConfig>) => {
+    setConfig(prev => ({ ...prev, ...updates }));
+  }, []);
 
   // Initialize game
   const initGame = useCallback(() => {
@@ -378,9 +389,11 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
     gameState,
     aiLog,
     isAiProcessing,
+    config,
     initGame,
     updateGame,
     togglePause,
     forceAiCall,
+    updateConfig,
   };
 }

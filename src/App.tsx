@@ -11,11 +11,15 @@ function App() {
     gameState,
     aiLog,
     isAiProcessing,
+    config,
     initGame,
     updateGame,
     togglePause,
     forceAiCall,
+    updateConfig,
   } = useGame(canvasSize.width, canvasSize.height, apiKey);
+
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Initialize game on mount
   useEffect(() => {
@@ -115,7 +119,29 @@ function App() {
           </div>
 
           <div className="sidebar-section">
-            <h3>Controls</h3>
+            <h3>
+              Controls
+              <button
+                className="settings-toggle"
+                onClick={() => setSettingsOpen(!settingsOpen)}
+                title="Game Settings"
+              >
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className={settingsOpen ? 'settings-icon-active' : ''}
+                >
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                </svg>
+              </button>
+            </h3>
             <div className="controls">
               <button className="btn btn-primary" onClick={togglePause}>
                 {gameState.isPaused ? 'Start' : 'Pause'}
@@ -130,6 +156,86 @@ function App() {
               >
                 {isAiProcessing ? 'Thinking...' : 'Call AI Now'}
               </button>
+            </div>
+          </div>
+
+          <div className={`settings-panel ${settingsOpen ? 'open' : ''}`}>
+            <div className="settings-content">
+              <div className="setting-item">
+                <label>Initial Planes</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="10"
+                  value={config.initialPlaneCount}
+                  onChange={e => updateConfig({ initialPlaneCount: parseInt(e.target.value) || 1 })}
+                />
+              </div>
+              <div className="setting-item">
+                <label>Min Planes</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="10"
+                  value={config.minPlanes}
+                  onChange={e => updateConfig({ minPlanes: parseInt(e.target.value) || 1 })}
+                />
+              </div>
+              <div className="setting-item">
+                <label>Max Planes</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="10"
+                  value={config.maxPlanes}
+                  onChange={e => updateConfig({ maxPlanes: parseInt(e.target.value) || 1 })}
+                />
+              </div>
+              <div className="setting-item">
+                <label>AI Interval (ms)</label>
+                <input
+                  type="number"
+                  min="1000"
+                  max="30000"
+                  step="1000"
+                  value={config.aiUpdateInterval}
+                  onChange={e => updateConfig({ aiUpdateInterval: parseInt(e.target.value) || 5000 })}
+                />
+              </div>
+              <div className="setting-item">
+                <label>Spawn Interval (ms)</label>
+                <input
+                  type="number"
+                  min="5000"
+                  max="60000"
+                  step="1000"
+                  value={config.spawnInterval}
+                  onChange={e => updateConfig({ spawnInterval: parseInt(e.target.value) || 20000 })}
+                />
+              </div>
+              <div className="setting-item">
+                <label>Game Speed</label>
+                <div className="range-input">
+                  <input
+                    type="range"
+                    min="0.1"
+                    max="2"
+                    step="0.1"
+                    value={config.gameSpeed}
+                    onChange={e => updateConfig({ gameSpeed: parseFloat(e.target.value) })}
+                  />
+                  <span>{config.gameSpeed.toFixed(1)}x</span>
+                </div>
+              </div>
+              <div className="setting-item">
+                <label>Debug Logging</label>
+                <button
+                  className={`toggle-btn ${config.debugLogging ? 'active' : ''}`}
+                  onClick={() => updateConfig({ debugLogging: !config.debugLogging })}
+                >
+                  {config.debugLogging ? 'ON' : 'OFF'}
+                </button>
+              </div>
             </div>
           </div>
 
