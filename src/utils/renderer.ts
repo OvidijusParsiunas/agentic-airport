@@ -105,29 +105,42 @@ export function drawPlane(ctx: CanvasRenderingContext2D, plane: Plane) {
   ctx.translate(plane.position.x, plane.position.y);
   ctx.rotate(degToRad(plane.heading + 90)); // +90 because our heading 0 = right, but we draw pointing up
 
-  // Plane body
-  ctx.fillStyle = plane.status === 'crashed' ? '#ef4444' : plane.color;
-  ctx.strokeStyle = plane.status === 'crashed' ? '#7f1d1d' : '#ffffff';
-  ctx.lineWidth = 1;
+  // Plane color
+  const bodyColor = plane.status === 'crashed' ? '#ef4444' : plane.color;
+  ctx.fillStyle = bodyColor;
 
-  // Main body (triangle/arrow shape)
+  // Fuselage (pointed oval body)
   ctx.beginPath();
-  ctx.moveTo(0, -15); // nose
-  ctx.lineTo(-8, 10); // left wing back
-  ctx.lineTo(0, 5); // tail indent
-  ctx.lineTo(8, 10); // right wing back
+  ctx.moveTo(0, -14);      // nose tip
+  ctx.lineTo(3, -6);       // right side upper
+  ctx.lineTo(3, 8);        // right side lower
+  ctx.lineTo(0, 12);       // tail tip
+  ctx.lineTo(-3, 8);       // left side lower
+  ctx.lineTo(-3, -6);      // left side upper
   ctx.closePath();
   ctx.fill();
-  ctx.stroke();
 
-  // Tail
+  // Main wings (swept back, filled)
   ctx.beginPath();
-  ctx.moveTo(-5, 8);
-  ctx.lineTo(0, 12);
-  ctx.lineTo(5, 8);
+  ctx.moveTo(0, -3);       // wing root front
+  ctx.lineTo(-12, 5);      // left wing tip
+  ctx.lineTo(-10, 7);      // left wing back
+  ctx.lineTo(0, 2);        // wing root back
+  ctx.lineTo(10, 7);       // right wing back
+  ctx.lineTo(12, 5);       // right wing tip
   ctx.closePath();
   ctx.fill();
-  ctx.stroke();
+
+  // Tail wings (small, filled)
+  ctx.beginPath();
+  ctx.moveTo(0, 8);        // tail root
+  ctx.lineTo(-6, 13);      // left tail tip
+  ctx.lineTo(-5, 14);      // left tail back
+  ctx.lineTo(0, 10);       // tail center
+  ctx.lineTo(5, 14);       // right tail back
+  ctx.lineTo(6, 13);       // right tail tip
+  ctx.closePath();
+  ctx.fill();
 
   ctx.restore();
 
