@@ -15,7 +15,6 @@ function App() {
     initGame,
     updateGame,
     togglePause,
-    forceAiCall,
     updateConfig,
   } = useGame(canvasSize.width, canvasSize.height, apiKey);
 
@@ -149,13 +148,9 @@ function App() {
               <button className="btn btn-secondary" onClick={initGame}>
                 Reset
               </button>
-              <button
-                className="btn btn-secondary"
-                onClick={forceAiCall}
-                disabled={!apiKey || isAiProcessing}
-              >
-                {isAiProcessing ? 'Thinking...' : 'Call AI Now'}
-              </button>
+              {isAiProcessing && (
+                <div className="ai-status">Thinking...</div>
+              )}
             </div>
           </div>
 

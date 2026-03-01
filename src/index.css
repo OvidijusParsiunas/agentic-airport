@@ -127,6 +127,13 @@ body {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+  align-items: center;
+}
+
+.ai-status {
+  font-size: 0.875rem;
+  color: #fbbf24;
+  padding: 8px 12px;
 }
 
 .btn {
