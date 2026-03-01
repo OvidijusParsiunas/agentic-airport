@@ -1,6 +1,6 @@
 # ✈️ Agentic Airport
 
-This project an air traffic control simulation where an AI agent acts as the controller in the tower. It is an experiment designed to explore agentic AI capabilities in controlling multiple objects in an active space.
+This project is an air traffic control simulation where an AI agent acts as the controller in the tower. It is an experiment designed to explore agentic AI capabilities for controlling multiple objects in an active space.
 
 ## 🎯 Objective
 
