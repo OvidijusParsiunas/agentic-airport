@@ -28,3 +28,5 @@ npm-debug.log*
 
 # Vite
 vite.config.ts.timestamp-*
+
+local
