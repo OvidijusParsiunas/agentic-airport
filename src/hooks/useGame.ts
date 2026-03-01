@@ -16,6 +16,30 @@ export const DEFAULT_CONFIG: GameConfig = {
   debugLogging: true, // Toggle debug logging for AI commands, crashes, landings
 };
 
+const CONFIG_STORAGE_KEY = 'agentic_airport_config';
+
+function loadConfigFromStorage(): GameConfig {
+  try {
+    const stored = localStorage.getItem(CONFIG_STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      // Merge with defaults to handle any new config fields
+      return { ...DEFAULT_CONFIG, ...parsed };
+    }
+  } catch (e) {
+    // Invalid JSON or localStorage error, use defaults
+  }
+  return DEFAULT_CONFIG;
+}
+
+function saveConfigToStorage(config: GameConfig): void {
+  try {
+    localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(config));
+  } catch (e) {
+    // localStorage might be full or disabled
+  }
+}
+
 function createInitialAirport(canvasWidth: number, canvasHeight: number): Airport {
   const centerX = canvasWidth * 0.75; // Positioned to the right
   const centerY = canvasHeight / 2;
@@ -44,7 +68,7 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
 
   const [aiLog, setAiLog] = useState<Array<{ time: string; message: string }>>([]);
   const [isAiProcessing, setIsAiProcessing] = useState(false);
-  const [config, setConfig] = useState<GameConfig>(DEFAULT_CONFIG);
+  const [config, setConfig] = useState<GameConfig>(loadConfigFromStorage);
   const lastAiCallRef = useRef<number>(0);
   const lastSpawnRef = useRef<number>(0);
   const configRef = useRef<GameConfig>(config);
@@ -58,7 +82,11 @@ export function useGame(canvasWidth: number, canvasHeight: number, apiKey: strin
 
   // Update config function
   const updateConfig = useCallback((updates: Partial<GameConfig>) => {
-    setConfig(prev => ({ ...prev, ...updates }));
+    setConfig(prev => {
+      const newConfig = { ...prev, ...updates };
+      saveConfigToStorage(newConfig);
+      return newConfig;
+    });
   }, []);
 
   // Initialize game
