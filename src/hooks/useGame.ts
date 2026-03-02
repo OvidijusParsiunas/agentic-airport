@@ -2,9 +2,9 @@ import { movePosition, checkCollision, isOnRunway, angleDifference, normalizeAng
 import { GameState, Plane, Airport, GameConfig, ConversationMessage } from '../types/game';
 import { createPlane, resetPlaneCounter } from '../utils/planeFactory';
 import { useState, useCallback, useRef, useEffect } from 'react';
+import { applyCommand } from '../utils/commandHandler';
 import { getAICommands } from '../services/openai';
 import { debugLog } from '../utils/debug';
-import { applyCommand } from '../utils/commandHandler';
 
 export const DEFAULT_CONFIG: GameConfig = {
   initialPlaneCount: 4,
